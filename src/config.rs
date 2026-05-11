@@ -10,6 +10,16 @@ pub struct ModuleConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct ApiMonitorConfig {
+    pub name: String,
+    pub url: String,
+    #[serde(default = "default_api_interval")]
+    pub refresh_interval: u64,
+}
+
+fn default_api_interval() -> u64 { 30 }
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub layout: String,
     pub column_weights: Vec<u16>,
@@ -21,6 +31,8 @@ pub struct Config {
     pub module_order: Vec<String>,
     #[serde(default)]
     pub modules: HashMap<String, ModuleConfig>,
+    #[serde(default)]
+    pub api_monitors: Vec<ApiMonitorConfig>,
 }
 
 impl Default for Config {
@@ -32,6 +44,7 @@ impl Default for Config {
             theme: "Dracula".to_string(),
             module_order: Vec::new(),
             modules: HashMap::new(),
+            api_monitors: Vec::new(),
         }
     }
 }

@@ -1,4 +1,4 @@
-use x_panel::modules::{DeepSeekBalanceModule, SystemInfoModule, NetworkMonitorModule, SystemTempModule, ClockModule};
+use x_panel::modules::{DeepSeekBalanceModule, SystemInfoModule, NetworkMonitorModule, SystemTempModule, ClockModule, WebApiModule};
 use x_panel::{Config, Panel};
 
 #[tokio::main]
@@ -50,6 +50,17 @@ async fn main() -> anyhow::Result<()> {
     panel.register_module(Box::new(ClockModule::new(1)));
     panel.log_info("时钟日历模块已注册");
     println!("✅ 已注册 时钟日历模块");
+
+    // 注册 Web API 监控模块
+    for api_cfg in &config.api_monitors {
+        panel.register_module(Box::new(WebApiModule::new(
+            api_cfg.name.clone(),
+            api_cfg.url.clone(),
+            api_cfg.refresh_interval,
+        )));
+        panel.log_info(&format!("Web API 模块已注册：{}", api_cfg.name));
+        println!("✅ 已注册 Web API 模块：{}", api_cfg.name);
+    }
 
     // 应用已保存的配置
     panel.apply_config();

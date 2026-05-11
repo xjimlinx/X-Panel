@@ -175,17 +175,7 @@ impl Panel {
 
         self.logger.info("X-Panel 启动");
 
-        // 立即更新所有模块
-        for idx in 0..self.registry.len() {
-            if let Some((_, module)) = self.registry.get_mut(idx) {
-                let result = module.update().await;
-                if !result.success {
-                    let err = result.error.unwrap_or_else(|| "未知错误".to_string());
-                    self.logger.error(&format!("初始刷新 {}: {}", module.name(), err));
-                }
-            }
-        }
-
+        // 直接进入主循环，界面立即显示，模块在后台自动加载
         let result = self.run_loop(&mut terminal).await;
 
         disable_raw_mode()?;
@@ -203,7 +193,12 @@ impl Panel {
         &mut self,
         terminal: &mut Terminal<B>,
     ) -> anyhow::Result<()> {
-        let mut module_last_update: HashMap<String, std::time::Instant> = HashMap::new();
+        // 设置过去时间，让所有模块在第一次循环时立即刷新
+        let past = std::time::Instant::now() - Duration::from_secs(3600);
+        let mut module_last_update: HashMap<String, std::time::Instant> = self.registry.modules()
+            .map(|(id, _)| (id.clone(), past))
+            .collect();
+        let mut module_failures: HashMap<String, u32> = HashMap::new();
 
         loop {
             terminal.draw(|f| self.ui(f))?;
@@ -332,7 +327,7 @@ impl Panel {
                             KeyCode::Char('r') => {
                                 for idx in 0..self.registry.len() {
                                     if let Some((_, module)) = self.registry.get_mut(idx) {
-                                        let _ = module.update().await;
+                                        let _ = tokio::time::timeout(Duration::from_secs(10), module.update()).await;
                                     }
                                 }
                                 self.status_message = "已刷新所有模块".to_string();
@@ -340,9 +335,10 @@ impl Panel {
                             }
                             KeyCode::Char('u') => {
                                 if let Some((_, module)) = self.registry.get_mut(self.current_module_idx) {
-                                    let _ = module.update().await;
-                                    self.status_message = format!("已刷新：{}", module.name());
-                                    self.logger.info(&format!("手动刷新：{}", module.name()));
+                                    let name = module.name().to_string();
+                                    let _ = tokio::time::timeout(Duration::from_secs(10), module.update()).await;
+                                    self.status_message = format!("已刷新：{}", name);
+                                    self.logger.info(&format!("手动刷新：{}", name));
                                 }
                             }
                             KeyCode::Char(' ') => {
@@ -454,10 +450,27 @@ impl Panel {
                     if interval == 0 { continue; }
                     let last_time = module_last_update.entry(id.clone()).or_insert(now);
                     if now.duration_since(*last_time).as_secs() >= interval {
-                        let result = module.update().await;
-                        if !result.success {
-                            let err = result.error.unwrap_or_else(|| "未知错误".to_string());
-                            self.logger.error(&format!("刷新 {}: {}", module.name(), err));
+                        let name = module.name().to_string();
+                        let result = tokio::time::timeout(Duration::from_secs(10), module.update()).await;
+                        let failed = match &result {
+                            Ok(update) => !update.success,
+                            Err(_) => true,
+                        };
+                        if failed {
+                            let failures = module_failures.entry(id.clone()).or_insert(0);
+                            *failures += 1;
+                            let err = match result {
+                                Ok(update) => update.error.unwrap_or_else(|| "未知错误".to_string()),
+                                Err(_) => "超时".to_string(),
+                            };
+                            self.logger.error(&format!("刷新 {} ({}/3): {}", name, failures, err));
+                            if *failures >= 3 {
+                                self.registry.set_visible(id, false);
+                                self.logger.info(&format!("自动隐藏 {}（连续 {} 次失败）", name, failures));
+                                module_failures.remove(id);
+                            }
+                        } else {
+                            module_failures.remove(id);
                         }
                         *last_time = now;
                     }

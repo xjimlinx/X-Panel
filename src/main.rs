@@ -50,6 +50,9 @@ async fn main() -> anyhow::Result<()> {
     panel.log_info("时钟日历模块已注册");
     println!("✅ 已注册 时钟日历模块");
 
+    // 应用已保存的配置
+    panel.apply_config();
+
     panel.log_info(&format!("启动完成，共 {} 个模块", panel.module_count()));
     println!("\n🚀 启动面板... 按 'q' 退出\n");
 

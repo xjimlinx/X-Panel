@@ -1,3 +1,4 @@
+use crate::config::{Config, ModuleConfig};
 use crate::logger::{LogLevel, Logger};
 use crate::module_trait::PanelModule;
 use crate::registry::ModuleRegistry;
@@ -57,6 +58,7 @@ pub struct Panel {
     show_logs: bool,
     log_scroll: usize,
     logger: Logger,
+    config: Config,
     module_height_deltas: Vec<i16>,  // 每个模块的高度偏移
 }
 
@@ -75,15 +77,27 @@ impl Panel {
             show_logs: false,
             log_scroll: 0,
             logger: Logger::new(500),
+            config: Config::load(),
             module_height_deltas: vec![],
         }
     }
 
     /// 注册模块
     pub fn register_module(&mut self, module: Box<dyn PanelModule>) {
+        let id = module.id().to_string();
         let name = module.name().to_string();
         self.registry.register(module);
         self.module_height_deltas.push(0);
+        // 应用已保存的模块配置
+        if let Some(mcfg) = self.config.modules.get(&id) {
+            let idx = self.module_height_deltas.len() - 1;
+            self.module_height_deltas[idx] = mcfg.height_offset;
+            self.registry.set_visible(&id, mcfg.visible);
+            if let Some((_, m)) = self.registry.modules_mut().nth(idx) {
+                m.set_refresh_interval(60); // 恢复时重置间隔
+            }
+            self.logger.info(&format!("恢复模块配置：{}", name));
+        }
         self.logger.info(&format!("注册模块：{}", name));
     }
 
@@ -95,6 +109,43 @@ impl Panel {
     /// 获取模块总数
     pub fn module_count(&self) -> usize {
         self.registry.len()
+    }
+
+    /// 应用已保存的全局配置（注册完所有模块后调用）
+    pub fn apply_config(&mut self) {
+        self.layout_mode = match self.config.layout.as_str() {
+            "Double" => LayoutMode::Double,
+            "Triple" => LayoutMode::Triple,
+            _ => LayoutMode::Single,
+        };
+        if self.config.column_weights.len() == self.layout_mode.columns() {
+            self.column_weights = self.config.column_weights.clone();
+        } else {
+            self.column_weights = vec![10; self.layout_mode.columns()];
+        }
+        self.logger.info(&format!("应用保存的配置：{:?} 列", self.layout_mode.columns()));
+    }
+
+    /// 保存当前配置到文件
+    fn save_config(&mut self) {
+        self.config.layout = match self.layout_mode {
+            LayoutMode::Single => "Single",
+            LayoutMode::Double => "Double",
+            LayoutMode::Triple => "Triple",
+        }.to_string();
+        self.config.column_weights = self.column_weights.clone();
+
+        // 更新所有模块的配置
+        for (i, (id, _)) in self.registry.modules().enumerate() {
+            let visible = self.registry.is_visible(id);
+            let height_offset = self.module_height_deltas.get(i).copied().unwrap_or(0);
+            self.config.modules.insert(id.clone(), ModuleConfig {
+                visible,
+                height_offset,
+            });
+        }
+
+        self.config.save();
     }
 
     /// 运行面板
@@ -186,6 +237,7 @@ impl Panel {
                                     } else {
                                         self.logger.info(&format!("显示模块：{}", id));
                                     }
+                                    self.save_config();
                                 }
                             }
                             _ => {}
@@ -229,18 +281,24 @@ impl Panel {
                                 }
                             }
                             KeyCode::Char(' ') => {
+                                let mut info = None;
                                 if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
                                     module.toggle_pause();
-                                    let status = if module.is_paused() { "已暂停" } else { "已恢复" };
-                                    self.status_message = format!("{}: {}", module.name(), status);
-                                    self.logger.info(&format!("{}：{}", module.name(), status));
+                                    info = Some((module.name().to_string(), module.is_paused()));
                                 }
+                                if let Some((name, paused)) = info {
+                                    let status = if paused { "已暂停" } else { "已恢复" };
+                                    self.status_message = format!("{}: {}", name, status);
+                                    self.logger.info(&format!("{}：{}", name, status));
+                                }
+                                self.save_config();
                             }
                             KeyCode::Char('l') | KeyCode::Char('L') => {
                                 self.layout_mode = self.layout_mode.next();
                                 self.adjust_column_weights();
                                 self.status_message = format!("布局：{:?} 列", self.layout_mode.columns());
                                 self.logger.info(&format!("切换布局：{}列", self.layout_mode.columns()));
+                                self.save_config();
                             }
                             KeyCode::Char('[') => {
                                 self.adjust_column_width(self.current_module_idx, -1);
@@ -350,6 +408,7 @@ impl Panel {
         self.column_weights[column_idx] = new_weight;
         
         self.status_message = format!("列{}宽度：{}", column_idx + 1, new_weight);
+        self.save_config();
     }
 
     fn modules_per_column(&self) -> usize {
@@ -441,6 +500,7 @@ impl Panel {
 
         let name = self.get_current_module_name();
         self.status_message = format!("{}: 高度偏移 {} (范围 -5 ~ +10)", name, new_delta);
+        self.save_config();
     }
 
     fn ui(&mut self, f: &mut Frame) {

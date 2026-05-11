@@ -54,6 +54,7 @@ pub struct Panel {
     layout_mode: LayoutMode,
     column_weights: Vec<u16>,  // 每列的权重
     show_about: bool,
+    show_quit_confirm: bool,
     show_theme_selector: bool,
     theme_selector_cursor: usize,
     show_settings: bool,
@@ -76,6 +77,7 @@ impl Panel {
             layout_mode: LayoutMode::Single,
             column_weights: vec![10],  // 默认单列，权重 10
             show_about: false,
+            show_quit_confirm: false,
             show_theme_selector: false,
             theme_selector_cursor: 0,
             show_settings: false,
@@ -300,6 +302,13 @@ impl Panel {
                             }
                             _ => {}
                         }
+                    } else if self.show_quit_confirm {
+                        if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                            self.running = false;
+                        } else {
+                            self.show_quit_confirm = false;
+                            self.status_message = String::new();
+                        }
                     } else {
                         match key.code {
                             KeyCode::Esc => {
@@ -323,7 +332,7 @@ impl Panel {
                                 self.show_about = false;
                                 self.status_message = "模块设置 - ESC 返回".to_string();
                             }
-                            KeyCode::Char('q') => self.running = false,
+                            KeyCode::Char('q') => self.show_quit_confirm = true,
                             KeyCode::Char('r') => {
                                 for idx in 0..self.registry.len() {
                                     if let Some((_, module)) = self.registry.get_mut(idx) {
@@ -651,6 +660,47 @@ impl Panel {
         // 日志查看器叠加层
         if self.show_logs {
             self.render_log_viewer(f);
+        }
+
+        // 退出确认叠加层
+        if self.show_quit_confirm {
+            let area = f.size();
+            let block = Block::default()
+                .title("退出确认")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(self.theme().highlight));
+            let win_w = 30.min(area.width.saturating_sub(4));
+            let win_h = 5.min(area.height.saturating_sub(4));
+            let quit_area = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length((area.height - win_h) / 2),
+                    Constraint::Length(win_h),
+                    Constraint::Min(0),
+                ])
+                .split(area)[1];
+            let inner = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length((area.width - win_w) / 2),
+                    Constraint::Length(win_w),
+                    Constraint::Min(0),
+                ])
+                .split(quit_area)[1];
+            f.render_widget(Clear, inner);
+            f.render_widget(block, inner);
+            let text = vec![
+                Line::from(Span::styled("确认退出？", Style::default().fg(self.theme().text))),
+                Line::from(Span::styled("按 y 确认，其他键取消", Style::default().fg(self.theme().dim))),
+            ];
+            let paragraph = Paragraph::new(text)
+                .alignment(Alignment::Center)
+                .block(Block::default());
+            let content = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+                .split(inner)[1];
+            f.render_widget(paragraph, content);
         }
 
         // 主题选择器叠加层

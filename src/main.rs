@@ -1,6 +1,5 @@
 use x_panel::{Panel};
 use x_panel::modules::{DeepSeekBalanceModule, SystemInfoModule, NetworkMonitorModule, SystemTempModule, ClockModule};
-use std::process::Command;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -54,24 +53,7 @@ async fn main() -> anyhow::Result<()> {
     // 运行面板
     let result = panel.run().await;
 
-    // 程序退出时发送通知
-    // send_task_notification("X-Panel");
-
     result?;
 
     Ok(())
-}
-
-/// 发送任务完成通知
-fn send_task_notification(task_name: &str) {
-    let script_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("notify.py");
-
-    if script_path.exists() {
-        let _ = Command::new("python3")
-            .arg(&script_path)
-            .arg("task")
-            .arg("--name")
-            .arg(task_name)
-            .output();
-    }
 }

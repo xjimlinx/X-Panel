@@ -1,6 +1,6 @@
 [package]
 name = "x-panel"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "X-Panel 模块化终端面板框架"
 authors = ["xein"]

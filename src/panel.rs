@@ -7,10 +7,10 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
-    prelude::Line,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    prelude::{Line, Span},
     style::{Color, Modifier, Style},
-    widgets::{Block, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame, Terminal,
 };
 use std::{collections::HashMap, io, time::Duration};
@@ -49,6 +49,8 @@ pub struct Panel {
     current_module_idx: usize,
     layout_mode: LayoutMode,
     column_weights: Vec<u16>,  // 每列的权重
+    show_about: bool,
+    module_height_deltas: Vec<i16>,  // 每个模块的高度偏移
 }
 
 impl Panel {
@@ -60,12 +62,15 @@ impl Panel {
             current_module_idx: 0,
             layout_mode: LayoutMode::Single,
             column_weights: vec![10],  // 默认单列，权重 10
+            show_about: false,
+            module_height_deltas: vec![],
         }
     }
 
     /// 注册模块
     pub fn register_module(&mut self, module: Box<dyn PanelModule>) {
         self.registry.register(module);
+        self.module_height_deltas.push(0);
     }
 
     /// 运行面板
@@ -106,6 +111,14 @@ impl Panel {
             if event::poll(Duration::from_millis(100))? {
                 if let Event::Key(key) = event::read()? {
                     match key.code {
+                        KeyCode::Esc => {
+                            self.show_about = !self.show_about;
+                            self.status_message = if self.show_about {
+                                "关于页面 - 按 ESC 关闭".to_string()
+                            } else {
+                                String::new()
+                            };
+                        }
                         KeyCode::Char('q') => self.running = false,
                         KeyCode::Char('r') => {
                             for (_, module) in self.registry.modules_mut() {
@@ -169,6 +182,28 @@ impl Panel {
                                 self.status_message = format!("选中：{}", self.get_current_module_name());
                             }
                         }
+                        KeyCode::Left => {
+                            if self.layout_mode.columns() > 1 {
+                                if let Some(idx) = self.navigate_horizontal(self.current_module_idx, -1) {
+                                    self.current_module_idx = idx;
+                                    self.status_message = format!("选中：{}", self.get_current_module_name());
+                                }
+                            }
+                        }
+                        KeyCode::Right => {
+                            if self.layout_mode.columns() > 1 {
+                                if let Some(idx) = self.navigate_horizontal(self.current_module_idx, 1) {
+                                    self.current_module_idx = idx;
+                                    self.status_message = format!("选中：{}", self.get_current_module_name());
+                                }
+                            }
+                        }
+                        KeyCode::Char('{') | KeyCode::PageUp => {
+                            self.adjust_module_height(self.current_module_idx, -1);
+                        }
+                        KeyCode::Char('}') | KeyCode::PageDown => {
+                            self.adjust_module_height(self.current_module_idx, 1);
+                        }
                         _ => {}
                     }
                 }
@@ -216,6 +251,58 @@ impl Panel {
         self.status_message = format!("列{}宽度：{}", column_idx + 1, new_weight);
     }
 
+    fn modules_per_column(&self) -> usize {
+        let len = self.registry.len();
+        let cols = self.layout_mode.columns();
+        if cols == 0 { return len; }
+        (len + cols - 1) / cols
+    }
+
+    fn navigate_horizontal(&self, from_idx: usize, direction: i8) -> Option<usize> {
+        let cols = self.layout_mode.columns();
+        let mpc = self.modules_per_column();
+        let len = self.registry.len();
+        let cur_col = from_idx / mpc;
+        let row = from_idx % mpc;
+
+        let target_col = if direction > 0 {
+            if cur_col + 1 >= cols { return None; }
+            cur_col + 1
+        } else {
+            if cur_col == 0 { return None; }
+            cur_col - 1
+        };
+
+        let start = target_col * mpc;
+        let end = std::cmp::min(start + mpc, len);
+        if start >= len { return None; }
+        Some(std::cmp::min(start + row, end - 1))
+    }
+
+    fn adjust_module_height(&mut self, module_idx: usize, delta: i16) {
+        if module_idx >= self.module_height_deltas.len() { return; }
+        let len = self.registry.len();
+        let mpc = self.modules_per_column();
+        let col = module_idx / mpc;
+        let start = col * mpc;
+        let end = std::cmp::min(start + mpc, len);
+
+        if end - start != 2 {
+            self.status_message = "当前列不支持调整高度（仅 2 个模块的列可调）".to_string();
+            return;
+        }
+
+        let new_delta = (self.module_height_deltas[module_idx] + delta).clamp(-5, 10);
+        self.module_height_deltas[module_idx] = new_delta;
+
+        let other = if module_idx == start { start + 1 } else { start };
+        let other_delta = (self.module_height_deltas[other] - delta).clamp(-5, 10);
+        self.module_height_deltas[other] = other_delta;
+
+        let name = self.get_current_module_name();
+        self.status_message = format!("{}: 高度偏移 {} (范围 -5 ~ +10)", name, new_delta);
+    }
+
     fn ui(&mut self, f: &mut Frame) {
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -231,7 +318,7 @@ impl Panel {
         // 标题
         let title = Paragraph::new("📊 X-Panel - 模块化面板")
             .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-            .block(Block::default().borders(ratatui::widgets::Borders::ALL));
+            .block(Block::default().borders(Borders::ALL));
         f.render_widget(title, main_chunks[0]);
 
         // 模块内容 - 多列布局
@@ -239,24 +326,94 @@ impl Panel {
 
         // 状态栏
         let status = Paragraph::new(format!(
-            "{} | 模块：{}/{} | 布局：{}列 | 空格 - 暂停 | l - 切换布局 | [/] - 列宽",
+            "{} | 模块：{}/{} | 布局：{}列 | 空格-暂停 | l-布局 | [/]-列宽 | PgUp/PgDn-列高",
             self.status_message,
             self.current_module_idx + 1,
             self.registry.len(),
             self.layout_mode.columns()
         ))
         .style(Style::default().fg(Color::Gray))
-        .block(Block::default().borders(ratatui::widgets::Borders::ALL));
+        .block(Block::default().borders(Borders::ALL));
         f.render_widget(status, main_chunks[2]);
 
         // 帮助信息
         let help = List::new(vec![
-            ListItem::new(Line::from("↑/↓ - 切换模块 | 空格 - 暂停 | +/- - 刷新间隔")),
-            ListItem::new(Line::from("l - 切换布局 (1/2/3 列) | [/] - 调整列宽 | r - 刷新全部 | u - 刷新当前")),
-            ListItem::new(Line::from("q - 退出")),
+            ListItem::new(Line::from("↑/↓ - 上下切换 | ←/→ - 左右列切换 | 空格 - 暂停 | +/- - 刷新间隔")),
+            ListItem::new(Line::from("l - 切换布局 | [/] - 列宽 | PgUp/PgDn - 列高 | r - 刷新全部 | u - 刷新当前")),
+            ListItem::new(Line::from("ESC - 关于 | q - 退出")),
         ])
-        .block(Block::default().title("帮助").borders(ratatui::widgets::Borders::ALL));
+        .block(Block::default().title("帮助").borders(Borders::ALL));
         f.render_widget(help, main_chunks[3]);
+
+        // 关于页面叠加层
+        if self.show_about {
+            self.render_about(f);
+        }
+    }
+
+    fn render_about(&mut self, f: &mut Frame) {
+        let area = f.size();
+        let block = Block::default()
+            .title("关于 X-Panel")
+            .borders(Borders::ALL)
+            .style(Style::default().fg(Color::Cyan));
+
+        let about_area = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length((area.height - 14) / 2),
+                Constraint::Length(14),
+                Constraint::Min(0),
+            ])
+            .split(area)[1];
+
+        let inner = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length((area.width - 50) / 2),
+                Constraint::Length(50),
+                Constraint::Min(0),
+            ])
+            .split(about_area)[1];
+
+        f.render_widget(Clear, inner);
+        f.render_widget(block, inner);
+
+        let title_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+        let subtitle_style = Style::default().add_modifier(Modifier::UNDERLINED);
+        let hint_style = Style::default().fg(Color::DarkGray);
+
+        let text = vec![
+            Line::from(vec![Span::styled("X-Panel", title_style)]),
+            Line::from(""),
+            Line::from("版本: 0.3.0"),
+            Line::from("描述: 模块化终端面板框架"),
+            Line::from("作者: xein"),
+            Line::from("协议: MIT"),
+            Line::from(""),
+            Line::from(vec![Span::styled("内置模块:", subtitle_style)]),
+            Line::from("  - DeepSeek 余额"),
+            Line::from("  - 系统信息 (CPU/内存/磁盘/GPU/电池)"),
+            Line::from("  - 网络监控 (网速/WiFi/IP)"),
+            Line::from("  - 系统温度与风扇"),
+            Line::from("  - 时钟日历"),
+            Line::from(""),
+            Line::from(vec![Span::styled("按 ESC 关闭", hint_style)]),
+        ];
+
+        let inner_area = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(0),
+                Constraint::Length(1),
+            ])
+            .split(inner)[1];
+
+        let paragraph = Paragraph::new(text)
+            .block(Block::default())
+            .alignment(Alignment::Center);
+        f.render_widget(paragraph, inner_area);
     }
 
     fn render_modules(&mut self, f: &mut Frame, area: Rect) {
@@ -291,16 +448,15 @@ impl Panel {
             
             if start_idx >= modules.len() { continue; }
             
-            // 计算这一列的总高度
-            let column_height: u16 = modules[start_idx..end_idx]
-                .iter()
-                .map(|(_, m)| m.height() + 2)
-                .sum();
-            
-            // 如果内容超过列高，需要滚动
             let constraints: Vec<Constraint> = modules[start_idx..end_idx]
                 .iter()
-                .map(|(_, m)| Constraint::Length(m.height() + 2))
+                .enumerate()
+                .map(|(i, (_, m))| {
+                    let idx = start_idx + i;
+                    let delta = self.module_height_deltas.get(idx).copied().unwrap_or(0);
+                    let h = (m.height() as i16 + delta).max(3) as u16;
+                    Constraint::Length(h + 2)
+                })
                 .collect();
             
             let column_layout = Layout::default()

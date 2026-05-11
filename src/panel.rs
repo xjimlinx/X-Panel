@@ -2,7 +2,7 @@ use crate::config::{Config, ModuleConfig};
 use crate::logger::{LogLevel, Logger};
 use crate::module_trait::PanelModule;
 use crate::registry::ModuleRegistry;
-use crate::theme::{Theme, THEMES, theme_index_by_name};
+use crate::theme::{Theme, all_themes, theme_index_by_name};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -54,6 +54,8 @@ pub struct Panel {
     layout_mode: LayoutMode,
     column_weights: Vec<u16>,  // 每列的权重
     show_about: bool,
+    show_theme_selector: bool,
+    theme_selector_cursor: usize,
     show_settings: bool,
     settings_cursor: usize,
     show_logs: bool,
@@ -74,6 +76,8 @@ impl Panel {
             layout_mode: LayoutMode::Single,
             column_weights: vec![10],  // 默认单列，权重 10
             show_about: false,
+            show_theme_selector: false,
+            theme_selector_cursor: 0,
             show_settings: false,
             settings_cursor: 0,
             show_logs: false,
@@ -104,18 +108,18 @@ impl Panel {
         self.logger.info(&format!("注册模块：{}", name));
     }
 
-    /// 写入一条 INFO 日志
-    pub fn log_info(&mut self, msg: &str) {
-        self.logger.info(msg);
-    }
-
     fn theme(&self) -> &'static Theme {
-        &THEMES[self.theme_index].theme
+        &all_themes()[self.theme_index].theme
     }
 
     /// 获取模块总数
     pub fn module_count(&self) -> usize {
         self.registry.len()
+    }
+
+    /// 写入一条 INFO 日志
+    pub fn log_info(&mut self, msg: &str) {
+        self.logger.info(msg);
     }
 
     /// 应用已保存的全局配置（注册完所有模块后调用）
@@ -142,7 +146,7 @@ impl Panel {
             LayoutMode::Triple => "Triple",
         }.to_string();
         self.config.column_weights = self.column_weights.clone();
-        self.config.theme = THEMES[self.theme_index].name.to_string();
+        self.config.theme = all_themes()[self.theme_index].name.clone();
 
         // 更新所有模块的配置
         for (i, (id, _)) in self.registry.modules().enumerate() {
@@ -216,6 +220,38 @@ impl Panel {
                                 if self.log_scroll > 0 {
                                     self.log_scroll -= 1;
                                 }
+                            }
+                            _ => {}
+                        }
+                    } else if self.show_theme_selector {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('t') | KeyCode::Char('T') => {
+                                self.show_theme_selector = false;
+                                self.status_message = String::new();
+                            }
+                            KeyCode::Up => {
+                                let len = all_themes().len();
+                                if self.theme_selector_cursor > 0 {
+                                    self.theme_selector_cursor -= 1;
+                                } else {
+                                    self.theme_selector_cursor = len - 1;
+                                }
+                            }
+                            KeyCode::Down => {
+                                let len = all_themes().len();
+                                if self.theme_selector_cursor < len - 1 {
+                                    self.theme_selector_cursor += 1;
+                                } else {
+                                    self.theme_selector_cursor = 0;
+                                }
+                            }
+                            KeyCode::Char(' ') => {
+                                self.theme_index = self.theme_selector_cursor;
+                                self.show_theme_selector = false;
+                                let name = &all_themes()[self.theme_index].name;
+                                self.status_message = format!("主题：{}", name);
+                                self.logger.info(&format!("切换主题：{}", name));
+                                self.save_config();
                             }
                             _ => {}
                         }
@@ -317,11 +353,10 @@ impl Panel {
                                 self.save_config();
                             }
                             KeyCode::Char('t') | KeyCode::Char('T') => {
-                                self.theme_index = (self.theme_index + 1) % THEMES.len();
-                                let name = THEMES[self.theme_index].name;
-                                self.status_message = format!("主题：{}", name);
-                                self.logger.info(&format!("切换主题：{}", name));
-                                self.save_config();
+                                self.show_theme_selector = true;
+                                self.theme_selector_cursor = self.theme_index;
+                                self.show_about = false;
+                                self.status_message = "主题选择 - ↑↓ 浏览 | 空格 选择 | ESC/t 关闭".to_string();
                             }
                             KeyCode::Char('[') => {
                                 self.adjust_column_width(self.current_module_idx, -1);
@@ -575,7 +610,7 @@ impl Panel {
         let help = List::new(vec![
             ListItem::new(Line::from("↑/↓ - 上下切换 | ←/→ - 左右列切换 | 空格 - 暂停 | +/- - 刷新间隔")),
             ListItem::new(Line::from("l - 切换布局 | [/] - 列宽 | PgUp/PgDn - 列高 | r - 刷新全部 | u - 刷新当前")),
-            ListItem::new(Line::from("s - 模块设置 | v - 日志 | t - 主题 | ESC - 关于 | q - 退出")),
+            ListItem::new(Line::from("s - 模块设置 | v - 日志 | t - 主题选择 | ESC - 关于 | q - 退出")),
         ])
         .block(Block::default().title("帮助").borders(Borders::ALL));
         f.render_widget(help, main_chunks[3]);
@@ -583,6 +618,11 @@ impl Panel {
         // 日志查看器叠加层
         if self.show_logs {
             self.render_log_viewer(f);
+        }
+
+        // 主题选择器叠加层
+        if self.show_theme_selector {
+            self.render_theme_selector(f);
         }
 
         // 设置页面叠加层
@@ -594,6 +634,63 @@ impl Panel {
         if self.show_about {
             self.render_about(f);
         }
+    }
+
+    fn render_theme_selector(&mut self, f: &mut Frame) {
+        let area = f.size();
+        let block = Block::default()
+            .title("🎨 选择主题")
+            .borders(Borders::ALL)
+            .style(Style::default().fg(self.theme().title_border));
+
+        let selector_area = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length((area.height - 10) / 2),
+                Constraint::Length(10),
+                Constraint::Min(0),
+            ])
+            .split(area)[1];
+
+        let inner = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length((area.width - 40) / 2),
+                Constraint::Length(40),
+                Constraint::Min(0),
+            ])
+            .split(selector_area)[1];
+
+        f.render_widget(Clear, inner);
+        f.render_widget(block, inner);
+
+        let content = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+            .split(inner)[1];
+
+        let themes = all_themes();
+        let mut lines: Vec<Line> = Vec::new();
+        for (i, tdef) in themes.iter().enumerate() {
+            let selected = i == self.theme_selector_cursor;
+            let current = i == self.theme_index;
+            let marker = if current { "▶ " } else { "  " };
+            let style = if selected {
+                Style::default().fg(self.theme().highlight).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(self.theme().text)
+            };
+            lines.push(Line::from(Span::styled(format!("{}{}", marker, tdef.name), style)));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "↑↓ 浏览 | 空格 选择 | ESC/t 关闭",
+            Style::default().fg(self.theme().dim),
+        )));
+
+        let paragraph = Paragraph::new(lines).block(Block::default()).alignment(Alignment::Center);
+        f.render_widget(paragraph, content);
     }
 
     fn render_log_viewer(&mut self, f: &mut Frame) {

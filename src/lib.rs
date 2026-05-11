@@ -11,4 +11,4 @@ pub use logger::Logger;
 pub use module_trait::{ModuleUpdate, PanelModule};
 pub use registry::ModuleRegistry;
 pub use panel::Panel;
-pub use theme::{Theme, THEMES, theme_index_by_name};
+pub use theme::{Theme, all_themes, theme_index_by_name};

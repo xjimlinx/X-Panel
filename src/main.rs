@@ -1,13 +1,14 @@
 use x_panel::modules::{DeepSeekBalanceModule, SystemInfoModule, NetworkMonitorModule, SystemTempModule, ClockModule};
-use x_panel::Panel;
+use x_panel::{Config, Panel};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
-    // 获取配置
+    // 读取配置文件（作为环境变量的后备）
+    let config = Config::load();
     let api_key = std::env::var("DEEPSEEK_API_KEY")
-        .unwrap_or_else(|_| String::new());
+        .unwrap_or_else(|_| config.deepseek_api_key.clone());
 
     let refresh_interval: u64 = std::env::var("REFRESH_INTERVAL")
         .unwrap_or_else(|_| "60".to_string())

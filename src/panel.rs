@@ -722,7 +722,7 @@ impl Panel {
         let text = vec![
             Line::from(vec![Span::styled("X-Panel", title_style)]),
             Line::from(""),
-            Line::from("版本: 0.3.0"),
+            Line::from(format!("版本: {}", env!("CARGO_PKG_VERSION"))),
             Line::from("描述: 模块化终端面板框架"),
             Line::from("作者: xein"),
             Line::from("协议: MIT"),
@@ -775,7 +775,10 @@ impl Panel {
         }
 
         let max_cols = self.layout_mode.columns();
-        let effective_cols = std::cmp::min(max_cols, modules.len());
+        let effective_cols = (1..=max_cols.min(modules.len()))
+            .rev()
+            .find(|&c| (modules.len() + c - 1) / c * (c - 1) < modules.len())
+            .unwrap_or(1);
         let modules_per_column = (modules.len() + effective_cols - 1) / effective_cols;
 
         let column_constraints: Vec<Constraint> = self.column_weights.iter()

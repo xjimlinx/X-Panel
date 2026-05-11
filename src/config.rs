@@ -13,6 +13,9 @@ pub struct ModuleConfig {
 pub struct Config {
     pub layout: String,
     pub column_weights: Vec<u16>,
+    #[serde(default)]
+    pub deepseek_api_key: String,
+    #[serde(default)]
     pub modules: HashMap<String, ModuleConfig>,
 }
 
@@ -21,6 +24,7 @@ impl Default for Config {
         Config {
             layout: "Single".to_string(),
             column_weights: vec![10],
+            deepseek_api_key: String::new(),
             modules: HashMap::new(),
         }
     }
@@ -36,15 +40,27 @@ impl Config {
         let path = Self::path();
         match fs::read_to_string(&path) {
             Ok(content) => {
-                match toml::from_str(&content) {
-                    Ok(config) => config,
+                match toml::from_str::<Config>(&content) {
+                    Ok(config) => {
+                        // 兼容旧配置：缺少 deepseek_api_key 时自动补充
+                        if !content.contains("deepseek_api_key") {
+                            config.save();
+                        }
+                        config
+                    }
                     Err(e) => {
                         eprintln!("配置解析失败 ({}), 使用默认配置", e);
-                        Config::default()
+                        let config = Config::default();
+                        config.save();
+                        config
                     }
                 }
             }
-            Err(_) => Config::default(),
+            Err(_) => {
+                let config = Config::default();
+                config.save();
+                config
+            }
         }
     }
 

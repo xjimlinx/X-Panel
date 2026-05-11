@@ -2,7 +2,7 @@
 
 模块化终端面板框架 - 基于 Rust + TUI
 
-![Version](https://img.shields.io/badge/version-0.3.0-blue)
+![Version](https://img.shields.io/badge/version-0.5.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## 功能特性
@@ -16,8 +16,10 @@
 - 🕐 **时钟日历**: 实时时钟、日期、星期、周数
 - 💰 **API 余额**: DeepSeek API 余额实时查询
 - 🔔 **桌面通知**: 任务完成自动通知
-- 👁️ **模块管理**: 设置界面开关模块显示
+- 👁️ **模块管理**: 设置界面开关+排序模块
+- 🌐 **Web API 监控**: 自定义 HTTP 接口监控（配置 config.toml）
 - 📐 **动态布局**: 多列自适应 + 列宽/列高可调
+- 🎨 **主题系统**: 4 内置主题 + 用户自定义 TOML 主题
 - ⌨️ **快捷键**: 丰富的键盘交互
 - 🎨 **美观 UI**: 基于 ratatui 的现代化终端界面
 
@@ -41,7 +43,8 @@ X-Panel/
 │       ├── system_info.rs       # 系统信息模块
 │       ├── network_monitor.rs   # 网络监控模块
 │       ├── system_temp.rs       # 系统温度模块
-│       └── clock.rs             # 时钟日历模块
+│       ├── clock.rs             # 时钟日历模块
+│       └── web_api.rs           # Web API 监控模块
 ├── notify.py               # 桌面通知脚本
 ├── .env.example            # 环境变量模板
 ├── README.md               # 使用文档
@@ -84,8 +87,10 @@ cargo build --release
 | `[` / `]` | 减小/增大列宽 |
 | `{` / `PgUp` | 减小模块高度 |
 | `}` / `PgDn` | 增大模块高度 |
-| `s` | 打开模块设置（开关显示） |
+| `s` | 打开模块设置（开关/排序） |
 | `v` | 打开日志查看器 |
+| `t` | 打开主题选择器 |
+| `q` | 退出（弹窗确认，y 确认） |
 | **ESC** | 关于页面 / 关闭弹窗 |
 
 ## 内置模块

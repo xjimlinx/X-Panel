@@ -13,7 +13,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame, Terminal,
 };
-use std::{collections::HashMap, io, time::Duration};
+use std::collections::HashMap;
+use std::{io, time::Duration};
 
 /// 布局模式
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,6 +51,8 @@ pub struct Panel {
     layout_mode: LayoutMode,
     column_weights: Vec<u16>,  // 每列的权重
     show_about: bool,
+    show_settings: bool,
+    settings_cursor: usize,
     module_height_deltas: Vec<i16>,  // 每个模块的高度偏移
 }
 
@@ -63,6 +66,8 @@ impl Panel {
             layout_mode: LayoutMode::Single,
             column_weights: vec![10],  // 默认单列，权重 10
             show_about: false,
+            show_settings: false,
+            settings_cursor: 0,
             module_height_deltas: vec![],
         }
     }
@@ -110,101 +115,133 @@ impl Panel {
 
             if event::poll(Duration::from_millis(100))? {
                 if let Event::Key(key) = event::read()? {
-                    match key.code {
-                        KeyCode::Esc => {
-                            self.show_about = !self.show_about;
-                            self.status_message = if self.show_about {
-                                "关于页面 - 按 ESC 关闭".to_string()
-                            } else {
-                                String::new()
-                            };
-                        }
-                        KeyCode::Char('q') => self.running = false,
-                        KeyCode::Char('r') => {
-                            for (_, module) in self.registry.modules_mut() {
-                                let _ = module.update().await;
+                    if self.show_settings {
+                        match key.code {
+                            KeyCode::Esc => {
+                                self.show_settings = false;
+                                self.adjust_current_visible();
+                                self.status_message = String::new();
                             }
-                            self.status_message = "已刷新所有模块".to_string();
-                        }
-                        KeyCode::Char('u') => {
-                            if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
-                                let _ = module.update().await;
-                                self.status_message = format!("已刷新：{}", module.name());
+                            KeyCode::Up => {
+                                if self.settings_cursor > 0 {
+                                    self.settings_cursor -= 1;
+                                }
                             }
-                        }
-                        KeyCode::Char(' ') => {
-                            if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
-                                module.toggle_pause();
-                                let status = if module.is_paused() { "已暂停" } else { "已恢复" };
-                                self.status_message = format!("{}: {}", module.name(), status);
+                            KeyCode::Down => {
+                                let len = self.registry.len();
+                                if self.settings_cursor < len - 1 {
+                                    self.settings_cursor += 1;
+                                }
                             }
-                        }
-                        KeyCode::Char('l') | KeyCode::Char('L') => {
-                            // 切换布局模式
-                            self.layout_mode = self.layout_mode.next();
-                            self.adjust_column_weights();
-                            self.status_message = format!("布局：{:?} 列", self.layout_mode.columns());
-                        }
-                        KeyCode::Char('[') => {
-                            // 减小当前列宽度
-                            self.adjust_column_width(self.current_module_idx, -1);
-                        }
-                        KeyCode::Char(']') => {
-                            // 增大当前列宽度
-                            self.adjust_column_width(self.current_module_idx, 1);
-                        }
-                        KeyCode::Char('+') | KeyCode::Char('=') => {
-                            if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
-                                let current = module.refresh_interval();
-                                let new_interval = (current + 10).min(300);
-                                module.set_refresh_interval(new_interval);
-                                self.status_message = format!("{}: 刷新间隔 {} 秒", module.name(), new_interval);
+                            KeyCode::Char(' ') => {
+                                if let Some(id) = self.registry.nth_id(self.settings_cursor) {
+                                    let visible = self.registry.is_visible(&id);
+                                    self.registry.set_visible(&id, !visible);
+                                }
                             }
+                            _ => {}
                         }
-                        KeyCode::Char('-') => {
-                            if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
-                                let current = module.refresh_interval();
-                                let new_interval = if current <= 5 { 1 } else { current - 5 };
-                                module.set_refresh_interval(new_interval);
-                                self.status_message = format!("{}: 刷新间隔 {} 秒", module.name(), new_interval);
+                    } else {
+                        match key.code {
+                            KeyCode::Esc => {
+                                self.show_about = !self.show_about;
+                                self.status_message = if self.show_about {
+                                    "关于页面 - 按 ESC 关闭".to_string()
+                                } else {
+                                    String::new()
+                                };
                             }
-                        }
-                        KeyCode::Up => {
-                            if self.current_module_idx > 0 {
-                                self.current_module_idx -= 1;
-                                self.status_message = format!("选中：{}", self.get_current_module_name());
+                            KeyCode::Char('s') | KeyCode::Char('S') => {
+                                self.show_settings = true;
+                                self.settings_cursor = 0;
+                                self.show_about = false;
+                                self.status_message = "模块设置 - ESC 返回".to_string();
                             }
-                        }
-                        KeyCode::Down => {
-                            let len = self.registry.len();
-                            if self.current_module_idx < len - 1 {
-                                self.current_module_idx += 1;
-                                self.status_message = format!("选中：{}", self.get_current_module_name());
+                            KeyCode::Char('q') => self.running = false,
+                            KeyCode::Char('r') => {
+                                for (_, module) in self.registry.modules_mut() {
+                                    let _ = module.update().await;
+                                }
+                                self.status_message = "已刷新所有模块".to_string();
                             }
-                        }
-                        KeyCode::Left => {
-                            if self.layout_mode.columns() > 1 {
-                                if let Some(idx) = self.navigate_horizontal(self.current_module_idx, -1) {
+                            KeyCode::Char('u') => {
+                                if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
+                                    let _ = module.update().await;
+                                    self.status_message = format!("已刷新：{}", module.name());
+                                }
+                            }
+                            KeyCode::Char(' ') => {
+                                if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
+                                    module.toggle_pause();
+                                    let status = if module.is_paused() { "已暂停" } else { "已恢复" };
+                                    self.status_message = format!("{}: {}", module.name(), status);
+                                }
+                            }
+                            KeyCode::Char('l') | KeyCode::Char('L') => {
+                                self.layout_mode = self.layout_mode.next();
+                                self.adjust_column_weights();
+                                self.status_message = format!("布局：{:?} 列", self.layout_mode.columns());
+                            }
+                            KeyCode::Char('[') => {
+                                self.adjust_column_width(self.current_module_idx, -1);
+                            }
+                            KeyCode::Char(']') => {
+                                self.adjust_column_width(self.current_module_idx, 1);
+                            }
+                            KeyCode::Char('+') | KeyCode::Char('=') => {
+                                if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
+                                    let current = module.refresh_interval();
+                                    let new_interval = (current + 10).min(300);
+                                    module.set_refresh_interval(new_interval);
+                                    self.status_message = format!("{}: 刷新间隔 {} 秒", module.name(), new_interval);
+                                }
+                            }
+                            KeyCode::Char('-') => {
+                                if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
+                                    let current = module.refresh_interval();
+                                    let new_interval = if current <= 5 { 1 } else { current - 5 };
+                                    module.set_refresh_interval(new_interval);
+                                    self.status_message = format!("{}: 刷新间隔 {} 秒", module.name(), new_interval);
+                                }
+                            }
+                            KeyCode::Up => {
+                                if let Some(idx) = self.visible_prev(self.current_module_idx) {
                                     self.current_module_idx = idx;
                                     self.status_message = format!("选中：{}", self.get_current_module_name());
                                 }
                             }
-                        }
-                        KeyCode::Right => {
-                            if self.layout_mode.columns() > 1 {
-                                if let Some(idx) = self.navigate_horizontal(self.current_module_idx, 1) {
+                            KeyCode::Down => {
+                                if let Some(idx) = self.visible_next(self.current_module_idx) {
                                     self.current_module_idx = idx;
                                     self.status_message = format!("选中：{}", self.get_current_module_name());
                                 }
                             }
+                            KeyCode::Left => {
+                                if self.layout_mode.columns() > 1 {
+                                    if let Some(idx) = self.navigate_horizontal(self.current_module_idx, -1) {
+                                        self.current_module_idx = idx;
+                                        self.adjust_current_visible();
+                                        self.status_message = format!("选中：{}", self.get_current_module_name());
+                                    }
+                                }
+                            }
+                            KeyCode::Right => {
+                                if self.layout_mode.columns() > 1 {
+                                    if let Some(idx) = self.navigate_horizontal(self.current_module_idx, 1) {
+                                        self.current_module_idx = idx;
+                                        self.adjust_current_visible();
+                                        self.status_message = format!("选中：{}", self.get_current_module_name());
+                                    }
+                                }
+                            }
+                            KeyCode::Char('{') | KeyCode::PageUp => {
+                                self.adjust_module_height(self.current_module_idx, -1);
+                            }
+                            KeyCode::Char('}') | KeyCode::PageDown => {
+                                self.adjust_module_height(self.current_module_idx, 1);
+                            }
+                            _ => {}
                         }
-                        KeyCode::Char('{') | KeyCode::PageUp => {
-                            self.adjust_module_height(self.current_module_idx, -1);
-                        }
-                        KeyCode::Char('}') | KeyCode::PageDown => {
-                            self.adjust_module_height(self.current_module_idx, 1);
-                        }
-                        _ => {}
                     }
                 }
             }
@@ -279,6 +316,45 @@ impl Panel {
         Some(std::cmp::min(start + row, end - 1))
     }
 
+    fn visible_prev(&self, from: usize) -> Option<usize> {
+        let mut i = from;
+        loop {
+            if i == 0 { return None; }
+            i -= 1;
+            if let Some((id, _)) = self.registry.modules().nth(i) {
+                if self.registry.is_visible(id) {
+                    return Some(i);
+                }
+            }
+        }
+    }
+
+    fn visible_next(&self, from: usize) -> Option<usize> {
+        let len = self.registry.len();
+        let mut i = from;
+        loop {
+            i += 1;
+            if i >= len { return None; }
+            if let Some((id, _)) = self.registry.modules().nth(i) {
+                if self.registry.is_visible(id) {
+                    return Some(i);
+                }
+            }
+        }
+    }
+
+    fn adjust_current_visible(&mut self) {
+        if let Some((id, _)) = self.registry.modules().nth(self.current_module_idx) {
+            if !self.registry.is_visible(id) {
+                if let Some(idx) = self.visible_next(self.current_module_idx) {
+                    self.current_module_idx = idx;
+                } else if let Some(idx) = self.visible_prev(self.current_module_idx) {
+                    self.current_module_idx = idx;
+                }
+            }
+        }
+    }
+
     fn adjust_module_height(&mut self, module_idx: usize, delta: i16) {
         if module_idx >= self.module_height_deltas.len() { return; }
         let len = self.registry.len();
@@ -325,11 +401,13 @@ impl Panel {
         self.render_modules(f, main_chunks[1]);
 
         // 状态栏
+        let visible_count = self.registry.visible_count();
         let status = Paragraph::new(format!(
-            "{} | 模块：{}/{} | 布局：{}列 | 空格-暂停 | l-布局 | [/]-列宽 | PgUp/PgDn-列高",
+            "{} | 模块：{}/{} (可见 {}) | 布局：{}列 | 空格-暂停 | l-布局 | [/]-列宽 | PgUp/PgDn-列高",
             self.status_message,
             self.current_module_idx + 1,
             self.registry.len(),
+            visible_count,
             self.layout_mode.columns()
         ))
         .style(Style::default().fg(Color::Gray))
@@ -340,15 +418,86 @@ impl Panel {
         let help = List::new(vec![
             ListItem::new(Line::from("↑/↓ - 上下切换 | ←/→ - 左右列切换 | 空格 - 暂停 | +/- - 刷新间隔")),
             ListItem::new(Line::from("l - 切换布局 | [/] - 列宽 | PgUp/PgDn - 列高 | r - 刷新全部 | u - 刷新当前")),
-            ListItem::new(Line::from("ESC - 关于 | q - 退出")),
+            ListItem::new(Line::from("s - 模块设置 | ESC - 关于 | q - 退出")),
         ])
         .block(Block::default().title("帮助").borders(Borders::ALL));
         f.render_widget(help, main_chunks[3]);
+
+        // 设置页面叠加层
+        if self.show_settings {
+            self.render_settings(f);
+        }
 
         // 关于页面叠加层
         if self.show_about {
             self.render_about(f);
         }
+    }
+
+    fn render_settings(&mut self, f: &mut Frame) {
+        let area = f.size();
+        let block = Block::default()
+            .title("⚙ 模块设置")
+            .borders(Borders::ALL)
+            .style(Style::default().fg(Color::Cyan));
+
+        let settings_area = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length((area.height - 14) / 2),
+                Constraint::Length(14),
+                Constraint::Min(0),
+            ])
+            .split(area)[1];
+
+        let inner = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length((area.width - 50) / 2),
+                Constraint::Length(50),
+                Constraint::Min(0),
+            ])
+            .split(settings_area)[1];
+
+        f.render_widget(Clear, inner);
+        f.render_widget(block, inner);
+
+        let module_list: Vec<(String, String)> = self.registry.modules()
+            .map(|(id, m)| (id.clone(), m.name().to_string()))
+            .collect();
+
+        let mut lines: Vec<Line> = Vec::new();
+        for (i, (id, name)) in module_list.iter().enumerate() {
+            let visible = self.registry.is_visible(id);
+            let prefix = if visible { "[✓]" } else { "[✗]" };
+            let style = if i == self.settings_cursor {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("{} {}", prefix, name), style),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("↑/↓ - 选择 | 空格 - 开关 | ESC - 返回", Style::default().fg(Color::DarkGray)),
+        ]));
+
+        let inner_area = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(0),
+                Constraint::Length(1),
+            ])
+            .split(inner)[1];
+
+        let paragraph = Paragraph::new(lines)
+            .block(Block::default())
+            .alignment(Alignment::Center);
+        f.render_widget(paragraph, inner_area);
     }
 
     fn render_about(&mut self, f: &mut Frame) {
@@ -417,58 +566,65 @@ impl Panel {
     }
 
     fn render_modules(&mut self, f: &mut Frame, area: Rect) {
-        let modules: Vec<_> = self.registry.modules().collect();
-        if modules.is_empty() {
+        let all_modules: Vec<_> = self.registry.modules().collect();
+        if all_modules.is_empty() {
             let empty = Paragraph::new("没有注册任何模块")
-                .block(Block::default().title("模块列表").borders(ratatui::widgets::Borders::ALL));
+                .block(Block::default().title("模块列表").borders(Borders::ALL));
             f.render_widget(empty, area);
             return;
         }
 
-        let columns = self.layout_mode.columns();
-        
-        // 根据列数分割模块
-        let modules_per_column = (modules.len() + columns - 1) / columns;
-        
-        // 创建列布局
-        let column_constraints: Vec<Constraint> = self.column_weights.iter()
-            .take(columns)
-            .map(|&w| Constraint::Percentage((w * 100 / self.column_weights.iter().take(columns).sum::<u16>()) as u16))
+        let modules: Vec<(usize, &Box<dyn PanelModule>)> = all_modules.iter()
+            .enumerate()
+            .filter(|(_, (id, _))| self.registry.is_visible(id))
+            .map(|(i, (_, m))| (i, *m))
             .collect();
-        
+
+        if modules.is_empty() {
+            let empty = Paragraph::new("所有模块已隐藏，按 s 打开设置")
+                .block(Block::default().title("模块列表").borders(Borders::ALL));
+            f.render_widget(empty, area);
+            return;
+        }
+
+        let max_cols = self.layout_mode.columns();
+        let effective_cols = std::cmp::min(max_cols, modules.len());
+        let modules_per_column = (modules.len() + effective_cols - 1) / effective_cols;
+
+        let column_constraints: Vec<Constraint> = self.column_weights.iter()
+            .take(effective_cols)
+            .map(|&w| Constraint::Percentage((w * 100 / self.column_weights.iter().take(effective_cols).sum::<u16>()) as u16))
+            .collect();
+
         let columns_layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(column_constraints)
             .split(area);
-        
-        // 渲染每一列
+
         for (col_idx, column_area) in columns_layout.iter().enumerate() {
             let start_idx = col_idx * modules_per_column;
             let end_idx = std::cmp::min(start_idx + modules_per_column, modules.len());
-            
             if start_idx >= modules.len() { continue; }
-            
+
             let constraints: Vec<Constraint> = modules[start_idx..end_idx]
                 .iter()
                 .enumerate()
-                .map(|(i, (_, m))| {
-                    let idx = start_idx + i;
-                    let delta = self.module_height_deltas.get(idx).copied().unwrap_or(0);
+                .map(|(_, (orig_idx, m))| {
+                    let delta = self.module_height_deltas.get(*orig_idx).copied().unwrap_or(0);
                     let h = (m.height() as i16 + delta).max(3) as u16;
                     Constraint::Length(h + 2)
                 })
                 .collect();
-            
+
             let column_layout = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints(constraints)
                 .split(*column_area);
-            
-            // 渲染该列的每个模块
+
             for (i, module_idx) in (start_idx..end_idx).enumerate() {
                 if i < column_layout.len() {
-                    let (_, module) = &modules[module_idx];
-                    let is_selected = module_idx == self.current_module_idx;
+                    let (orig_idx, module) = &modules[module_idx];
+                    let is_selected = *orig_idx == self.current_module_idx;
                     module.render(f, column_layout[i], is_selected);
                 }
             }

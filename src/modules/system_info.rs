@@ -5,7 +5,7 @@ use ratatui::{
     layout::Rect,
     prelude::{Line, Modifier, Span},
     style::{Color, Style},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 use std::fs;
@@ -206,10 +206,17 @@ impl SystemInfoModule {
         "N/A".to_string()
     }
     
+    fn shorten_gpu_name(name: &str) -> String {
+        let name = name.trim();
+        let name = name.strip_prefix("NVIDIA ").unwrap_or(name);
+        let name = name.strip_prefix("AMD ").unwrap_or(name);
+        let name = name.strip_prefix("Intel ").unwrap_or(name);
+        let name = name.strip_prefix("Advanced Micro Devices, Inc. ").unwrap_or(name);
+        name.to_string()
+    }
+
     fn get_gpu_info() -> String {
-        // 尝试多种方式获取 GPU 信息
-        
-        // 1. 尝试 nvidia-smi (NVIDIA GPU)
+        // 1. nvidia-smi (NVIDIA GPU)
         if let Ok(output) = std::process::Command::new("nvidia-smi")
             .args(["--query-gpu=name,utilization.gpu,memory.used,memory.total", "--format=csv,noheader"])
             .output()
@@ -219,28 +226,33 @@ impl SystemInfoModule {
                 if !info.trim().is_empty() {
                     let parts: Vec<&str> = info.trim().split(", ").collect();
                     if parts.len() >= 4 {
-                        return format!("{} | 使用：{} | 显存：{}/{}", 
-                            parts[0], parts[1], parts[2], parts[3]);
+                        let name = Self::shorten_gpu_name(parts[0]);
+                        let util = parts[1].trim().trim_end_matches(" %");
+                        let mem_used = parts[2].trim().trim_end_matches(" MiB");
+                        let mem_total = parts[3].trim().trim_end_matches(" MiB");
+                        return format!("{} | {}% | {}M/{}({:.0}%)",
+                            name, util, mem_used, mem_total,
+                            mem_used.parse::<f64>().unwrap_or(0.0) / mem_total.parse::<f64>().unwrap_or(1.0) * 100.0);
                     }
                 }
             }
         }
-        
-        // 2. 尝试读取 AMD GPU 信息
+
+        // 2. AMD GPU
         if let Ok(content) = fs::read_to_string("/sys/class/drm/card0/device/gpu_busy_percent") {
             let usage = content.trim();
             if !usage.is_empty() {
-                let name = Self::get_gpu_name();
-                return format!("{} | 使用：{}%", name, usage);
+                let name = Self::shorten_gpu_name(&Self::get_gpu_name());
+                return format!("{} | {}%", name, usage);
             }
         }
-        
-        // 3. 尝试 lspci 获取 GPU 名称
+
+        // 3. lspci GPU 名称
         let gpu_name = Self::get_gpu_name();
         if !gpu_name.is_empty() {
-            return format!("{} | 使用：N/A", gpu_name);
+            return format!("{}", Self::shorten_gpu_name(&gpu_name));
         }
-        
+
         "N/A".to_string()
     }
     
@@ -326,22 +338,65 @@ impl SystemInfoModule {
     }
     
     fn get_power_usage() -> String {
-        // 尝试从 hwmon 读取 GPU 功耗 (power1_input 单位是微瓦)
+        // 1. NVIDIA GPU 功耗 (nvidia-smi)
+        if let Ok(output) = std::process::Command::new("nvidia-smi")
+            .args(["--query-gpu=power.draw", "--format=csv,noheader"])
+            .output()
+        {
+            if output.status.success() {
+                let info = String::from_utf8_lossy(&output.stdout);
+                let power = info.trim();
+                if !power.is_empty() && power != "[Not Supported]" {
+                    return format!("GPU: {}", power);
+                }
+            }
+        }
+
+        // 2. hwmon 功耗 (power1_input 单位微瓦)
         if let Ok(entries) = fs::read_dir("/sys/class/hwmon") {
             for entry in entries.flatten() {
                 let power_path = entry.path().join("power1_input");
-                if let Ok(content) = fs::read_to_string(power_path) {
+                if let Ok(content) = fs::read_to_string(&power_path) {
                     if let Ok(power) = content.trim().parse::<i64>() {
                         if power > 0 {
+                            let name = fs::read_to_string(entry.path().join("name")).unwrap_or_default();
+                            let label = if name.trim() == "amdgpu" { "GPU" } else { name.trim() };
                             let watts = power as f64 / 1_000_000.0;
-                            return format!("{:.1}W", watts);
+                            return format!("{}: {:.1}W", label, watts);
                         }
                     }
                 }
             }
         }
-        
-        // 尝试从 AMD GPU 读取
+
+        // 3. 电池放电功率 (power_now 单位微瓦)
+        if let Ok(content) = fs::read_to_string("/sys/class/power_supply/BAT0/power_now") {
+            if let Ok(power) = content.trim().parse::<i64>() {
+                if power > 0 {
+                    return format!("{:.1}W (电池放电)", power as f64 / 1_000_000.0);
+                }
+            }
+        }
+
+        // 4. Intel RAPL CPU 功耗 (energy_uj 单位微焦)
+        if let Ok(entries) = fs::read_dir("/sys/class/powercap") {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with("intel-rapl:") {
+                    let power_path = entry.path().join("power_uw");
+                    if let Ok(content) = fs::read_to_string(&power_path) {
+                        if let Ok(power) = content.trim().parse::<i64>() {
+                            if power > 0 {
+                                return format!("CPU: {:.1}W", power as f64 / 1_000_000.0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. AMD GPU debug
         if let Ok(content) = fs::read_to_string("/sys/kernel/debug/dri/0/amdgpu_pm_info") {
             for line in content.lines() {
                 if line.contains("power") || line.contains("Power") {
@@ -349,25 +404,7 @@ impl SystemInfoModule {
                 }
             }
         }
-        
-        // 尝试从 AMD GPU hwmon 读取
-        if let Ok(entries) = fs::read_dir("/sys/class/hwmon") {
-            for entry in entries.flatten() {
-                let name_path = entry.path().join("name");
-                if let Ok(name) = fs::read_to_string(name_path) {
-                    if name.contains("amdgpu") {
-                        let power_path = entry.path().join("power1_input");
-                        if let Ok(content) = fs::read_to_string(power_path) {
-                            if let Ok(power) = content.trim().parse::<i64>() {
-                                let watts = power as f64 / 1_000_000.0;
-                                return format!("{:.1}W", watts);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
+
         "N/A".to_string()
     }
 }
@@ -461,7 +498,8 @@ impl PanelModule for SystemInfoModule {
                     .borders(Borders::ALL)
                     .border_style(border_style)
                     .style(Style::default().fg(Color::White)),
-            );
+            )
+            .wrap(Wrap { trim: true });
 
         frame.render_widget(block, area);
     }

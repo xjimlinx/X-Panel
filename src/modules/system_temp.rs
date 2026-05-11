@@ -9,6 +9,7 @@ use ratatui::{
     Frame,
 };
 use std::fs;
+use crate::theme::Theme;
 
 pub struct SystemTempModule {
     cpu_temp: String,
@@ -157,11 +158,11 @@ impl PanelModule for SystemTempModule {
         ModuleUpdate { id: self.id().to_string(), success: true, error: None }
     }
     
-    fn render(&self, frame: &mut Frame, area: Rect, is_selected: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, is_selected: bool, theme: &Theme) {
         let border_style = if is_selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default().fg(theme.border_selected).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.border_default)
         };
         
         let lines = vec![
@@ -179,7 +180,7 @@ impl PanelModule for SystemTempModule {
         
         let all_lines = [lines, vec![pause_line]].concat();
         Paragraph::new(all_lines)
-            .block(Block::default().title(self.name()).borders(Borders::ALL).border_style(border_style))
+            .block(Block::default().title(self.name()).borders(Borders::ALL).border_style(border_style).style(Style::default().fg(theme.text).bg(theme.bg)))
             .render(area, frame.buffer_mut());
     }
     

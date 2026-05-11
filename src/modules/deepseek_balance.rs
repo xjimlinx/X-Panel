@@ -11,6 +11,7 @@ use ratatui::{
 use reqwest::Client;
 use serde::Deserialize;
 use std::time::Duration;
+use crate::theme::Theme;
 
 // ==================== DeepSeek 余额模块 ====================
 
@@ -157,7 +158,7 @@ impl PanelModule for DeepSeekBalanceModule {
         }
     }
     
-    fn render(&self, frame: &mut Frame, area: Rect, is_selected: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, is_selected: bool, theme: &Theme) {
         let show_data = !self.balance.is_empty();
         let balance_text = if show_data {
             Line::from(vec![
@@ -205,9 +206,9 @@ impl PanelModule for DeepSeekBalanceModule {
         };
 
         let border_style = if is_selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default().fg(theme.border_selected).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.border_default)
         };
 
         let error_line = if show_data {
@@ -235,7 +236,7 @@ impl PanelModule for DeepSeekBalanceModule {
                     .title(self.name())
                     .borders(Borders::ALL)
                     .border_style(border_style)
-                    .style(Style::default().fg(Color::White)),
+                    .style(Style::default().fg(theme.text).bg(theme.bg)),
             )
             .wrap(Wrap { trim: true });
 

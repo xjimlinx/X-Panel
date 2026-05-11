@@ -10,6 +10,7 @@ use ratatui::{
 };
 use std::fs;
 use std::time::Instant;
+use crate::theme::Theme;
 
 // CPU 使用率计算所需的数据
 struct CpuStats {
@@ -443,11 +444,11 @@ impl PanelModule for SystemInfoModule {
         }
     }
     
-    fn render(&self, frame: &mut Frame, area: Rect, is_selected: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, is_selected: bool, theme: &Theme) {
         let border_style = if is_selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default().fg(theme.border_selected).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme.border_default)
         };
         
         // 暂停状态标识
@@ -497,7 +498,7 @@ impl PanelModule for SystemInfoModule {
                     .title(self.name())
                     .borders(Borders::ALL)
                     .border_style(border_style)
-                    .style(Style::default().fg(Color::White)),
+                    .style(Style::default().fg(theme.text).bg(theme.bg)),
             )
             .wrap(Wrap { trim: true });
 

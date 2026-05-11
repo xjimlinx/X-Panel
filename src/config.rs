@@ -16,6 +16,8 @@ pub struct Config {
     #[serde(default)]
     pub deepseek_api_key: String,
     #[serde(default)]
+    pub theme: String,
+    #[serde(default)]
     pub modules: HashMap<String, ModuleConfig>,
 }
 
@@ -25,6 +27,7 @@ impl Default for Config {
             layout: "Single".to_string(),
             column_weights: vec![10],
             deepseek_api_key: String::new(),
+            theme: "Dracula".to_string(),
             modules: HashMap::new(),
         }
     }

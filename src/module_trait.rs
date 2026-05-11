@@ -1,3 +1,4 @@
+use crate::theme::Theme;
 use async_trait::async_trait;
 use ratatui::layout::Rect;
 use ratatui::Frame;
@@ -40,7 +41,7 @@ pub trait PanelModule: Send + Sync {
     async fn update(&mut self) -> ModuleUpdate;
     
     /// 渲染模块
-    fn render(&self, frame: &mut Frame, area: Rect, is_selected: bool);
+    fn render(&self, frame: &mut Frame, area: Rect, is_selected: bool, theme: &Theme);
     
     /// 获取模块高度（行数）
     fn height(&self) -> u16;

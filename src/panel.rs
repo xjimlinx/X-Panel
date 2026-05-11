@@ -2,6 +2,7 @@ use crate::config::{Config, ModuleConfig};
 use crate::logger::{LogLevel, Logger};
 use crate::module_trait::PanelModule;
 use crate::registry::ModuleRegistry;
+use crate::theme::{Theme, THEMES, theme_index_by_name};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -59,6 +60,7 @@ pub struct Panel {
     log_scroll: usize,
     logger: Logger,
     config: Config,
+    theme_index: usize,
     module_height_deltas: Vec<i16>,  // 每个模块的高度偏移
 }
 
@@ -78,6 +80,7 @@ impl Panel {
             log_scroll: 0,
             logger: Logger::new(500),
             config: Config::load(),
+            theme_index: 0,
             module_height_deltas: vec![],
         }
     }
@@ -106,6 +109,10 @@ impl Panel {
         self.logger.info(msg);
     }
 
+    fn theme(&self) -> &'static Theme {
+        &THEMES[self.theme_index].theme
+    }
+
     /// 获取模块总数
     pub fn module_count(&self) -> usize {
         self.registry.len()
@@ -123,7 +130,8 @@ impl Panel {
         } else {
             self.column_weights = vec![10; self.layout_mode.columns()];
         }
-        self.logger.info(&format!("应用保存的配置：{:?} 列", self.layout_mode.columns()));
+        self.theme_index = theme_index_by_name(&self.config.theme).unwrap_or(0);
+        self.logger.info(&format!("应用保存的配置：{:?} 列, 主题 {}", self.layout_mode.columns(), self.config.theme));
     }
 
     /// 保存当前配置到文件
@@ -134,6 +142,7 @@ impl Panel {
             LayoutMode::Triple => "Triple",
         }.to_string();
         self.config.column_weights = self.column_weights.clone();
+        self.config.theme = THEMES[self.theme_index].name.to_string();
 
         // 更新所有模块的配置
         for (i, (id, _)) in self.registry.modules().enumerate() {
@@ -307,6 +316,13 @@ impl Panel {
                                 self.logger.info(&format!("切换布局：{}列", self.layout_mode.columns()));
                                 self.save_config();
                             }
+                            KeyCode::Char('t') | KeyCode::Char('T') => {
+                                self.theme_index = (self.theme_index + 1) % THEMES.len();
+                                let name = THEMES[self.theme_index].name;
+                                self.status_message = format!("主题：{}", name);
+                                self.logger.info(&format!("切换主题：{}", name));
+                                self.save_config();
+                            }
                             KeyCode::Char('[') => {
                                 self.adjust_column_width(self.current_module_idx, -1);
                             }
@@ -371,20 +387,25 @@ impl Panel {
                 }
             }
 
-            // 自动更新模块
+            // 自动更新模块（跳过隐藏的模块）
             let now = std::time::Instant::now();
-            for (id, module) in self.registry.modules_mut() {
-                let interval = module.refresh_interval();
-                if interval == 0 { continue; }
-                
-                let last_time = module_last_update.entry(id.clone()).or_insert(now);
-                if now.duration_since(*last_time).as_secs() >= interval {
-                    let result = module.update().await;
-                    if !result.success {
-                        let err = result.error.unwrap_or_else(|| "未知错误".to_string());
-                        self.logger.error(&format!("刷新 {}: {}", module.name(), err));
+            let ids: Vec<String> = self.registry.modules()
+                .filter(|(id, _)| self.registry.is_visible(id))
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in &ids {
+                if let Some((_, module)) = self.registry.modules_mut().find(|(i, _)| *i == id) {
+                    let interval = module.refresh_interval();
+                    if interval == 0 { continue; }
+                    let last_time = module_last_update.entry(id.clone()).or_insert(now);
+                    if now.duration_since(*last_time).as_secs() >= interval {
+                        let result = module.update().await;
+                        if !result.success {
+                            let err = result.error.unwrap_or_else(|| "未知错误".to_string());
+                            self.logger.error(&format!("刷新 {}: {}", module.name(), err));
+                        }
+                        *last_time = now;
                     }
-                    *last_time = now;
                 }
             }
 
@@ -529,7 +550,7 @@ impl Panel {
 
         // 标题
         let title = Paragraph::new("📊 X-Panel - 模块化面板")
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(self.theme().title_fg).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(title, main_chunks[0]);
 
@@ -546,7 +567,7 @@ impl Panel {
             visible_count,
             self.layout_mode.columns()
         ))
-        .style(Style::default().fg(Color::Gray))
+        .style(Style::default().fg(self.theme().status_fg))
         .block(Block::default().borders(Borders::ALL));
         f.render_widget(status, main_chunks[2]);
 
@@ -554,7 +575,7 @@ impl Panel {
         let help = List::new(vec![
             ListItem::new(Line::from("↑/↓ - 上下切换 | ←/→ - 左右列切换 | 空格 - 暂停 | +/- - 刷新间隔")),
             ListItem::new(Line::from("l - 切换布局 | [/] - 列宽 | PgUp/PgDn - 列高 | r - 刷新全部 | u - 刷新当前")),
-            ListItem::new(Line::from("s - 模块设置 | v - 日志 | ESC - 关于 | q - 退出")),
+            ListItem::new(Line::from("s - 模块设置 | v - 日志 | t - 主题 | ESC - 关于 | q - 退出")),
         ])
         .block(Block::default().title("帮助").borders(Borders::ALL));
         f.render_widget(help, main_chunks[3]);
@@ -580,7 +601,7 @@ impl Panel {
         let block = Block::default()
             .title("📋 日志")
             .borders(Borders::ALL)
-            .style(Style::default().fg(Color::Cyan));
+            .style(Style::default().fg(self.theme().title_border));
 
         let log_area = Layout::default()
             .direction(Direction::Vertical)
@@ -627,7 +648,7 @@ impl Panel {
         }).collect();
 
         let hint = format!("共 {} 条 | ↑↓ 滚动 | ESC/v 关闭", entries.len());
-        all_lines.push(Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))));
+        all_lines.push(Line::from(Span::styled(hint, Style::default().fg(self.theme().dim))));
 
         let paragraph = Paragraph::new(all_lines).block(Block::default());
         f.render_widget(paragraph, content_area);
@@ -638,7 +659,7 @@ impl Panel {
         let block = Block::default()
             .title("⚙ 模块设置")
             .borders(Borders::ALL)
-            .style(Style::default().fg(Color::Cyan));
+            .style(Style::default().fg(self.theme().title_border));
 
         let settings_area = Layout::default()
             .direction(Direction::Vertical)
@@ -670,7 +691,7 @@ impl Panel {
             let visible = self.registry.is_visible(id);
             let prefix = if visible { "[✓]" } else { "[✗]" };
             let style = if i == self.settings_cursor {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default().fg(self.theme().highlight).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -681,7 +702,7 @@ impl Panel {
 
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("↑/↓ - 选择 | 空格 - 开关 | ESC - 返回", Style::default().fg(Color::DarkGray)),
+            Span::styled("↑/↓ - 选择 | 空格 - 开关 | ESC - 返回", Style::default().fg(self.theme().dim)),
         ]));
 
         let inner_area = Layout::default()
@@ -704,7 +725,7 @@ impl Panel {
         let block = Block::default()
             .title("关于 X-Panel")
             .borders(Borders::ALL)
-            .style(Style::default().fg(Color::Cyan));
+            .style(Style::default().fg(self.theme().title_border));
 
         let about_area = Layout::default()
             .direction(Direction::Vertical)
@@ -727,9 +748,9 @@ impl Panel {
         f.render_widget(Clear, inner);
         f.render_widget(block, inner);
 
-        let title_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+        let title_style = Style::default().fg(self.theme().highlight).add_modifier(Modifier::BOLD);
         let subtitle_style = Style::default().add_modifier(Modifier::UNDERLINED);
-        let hint_style = Style::default().fg(Color::DarkGray);
+        let hint_style = Style::default().fg(self.theme().dim);
 
         let text = vec![
             Line::from(vec![Span::styled("X-Panel", title_style)]),
@@ -830,7 +851,7 @@ impl Panel {
                 if i < column_layout.len() {
                     let (orig_idx, module) = &modules[module_idx];
                     let is_selected = *orig_idx == self.current_module_idx;
-                    module.render(f, column_layout[i], is_selected);
+                    module.render(f, column_layout[i], is_selected, self.theme());
                 }
             }
         }

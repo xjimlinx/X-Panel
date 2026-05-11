@@ -1,3 +1,4 @@
+use crate::logger::{LogLevel, Logger};
 use crate::module_trait::PanelModule;
 use crate::registry::ModuleRegistry;
 use crossterm::{
@@ -53,6 +54,9 @@ pub struct Panel {
     show_about: bool,
     show_settings: bool,
     settings_cursor: usize,
+    show_logs: bool,
+    log_scroll: usize,
+    logger: Logger,
     module_height_deltas: Vec<i16>,  // 每个模块的高度偏移
 }
 
@@ -68,14 +72,29 @@ impl Panel {
             show_about: false,
             show_settings: false,
             settings_cursor: 0,
+            show_logs: false,
+            log_scroll: 0,
+            logger: Logger::new(500),
             module_height_deltas: vec![],
         }
     }
 
     /// 注册模块
     pub fn register_module(&mut self, module: Box<dyn PanelModule>) {
+        let name = module.name().to_string();
         self.registry.register(module);
         self.module_height_deltas.push(0);
+        self.logger.info(&format!("注册模块：{}", name));
+    }
+
+    /// 写入一条 INFO 日志
+    pub fn log_info(&mut self, msg: &str) {
+        self.logger.info(msg);
+    }
+
+    /// 获取模块总数
+    pub fn module_count(&self) -> usize {
+        self.registry.len()
     }
 
     /// 运行面板
@@ -86,9 +105,15 @@ impl Panel {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
+        self.logger.info("X-Panel 启动");
+
         // 立即更新所有模块
         for (_, module) in self.registry.modules_mut() {
-            let _ = module.update().await;
+            let result = module.update().await;
+            if !result.success {
+                let err = result.error.unwrap_or_else(|| "未知错误".to_string());
+                self.logger.error(&format!("初始刷新 {}: {}", module.name(), err));
+            }
         }
 
         let result = self.run_loop(&mut terminal).await;
@@ -115,7 +140,26 @@ impl Panel {
 
             if event::poll(Duration::from_millis(100))? {
                 if let Event::Key(key) = event::read()? {
-                    if self.show_settings {
+                    if self.show_logs {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('v') | KeyCode::Char('V') => {
+                                self.show_logs = false;
+                                self.status_message = String::new();
+                            }
+                            KeyCode::Up => {
+                                let entries = self.logger.recent(1000).len();
+                                if self.log_scroll < entries.saturating_sub(1) {
+                                    self.log_scroll += 1;
+                                }
+                            }
+                            KeyCode::Down => {
+                                if self.log_scroll > 0 {
+                                    self.log_scroll -= 1;
+                                }
+                            }
+                            _ => {}
+                        }
+                    } else if self.show_settings {
                         match key.code {
                             KeyCode::Esc => {
                                 self.show_settings = false;
@@ -137,6 +181,11 @@ impl Panel {
                                 if let Some(id) = self.registry.nth_id(self.settings_cursor) {
                                     let visible = self.registry.is_visible(&id);
                                     self.registry.set_visible(&id, !visible);
+                                    if visible {
+                                        self.logger.info(&format!("隐藏模块：{}", id));
+                                    } else {
+                                        self.logger.info(&format!("显示模块：{}", id));
+                                    }
                                 }
                             }
                             _ => {}
@@ -151,6 +200,13 @@ impl Panel {
                                     String::new()
                                 };
                             }
+                            KeyCode::Char('v') | KeyCode::Char('V') => {
+                                self.show_logs = true;
+                                self.log_scroll = 0;
+                                self.show_about = false;
+                                self.status_message = "日志 - ESC 返回".to_string();
+                                self.logger.info("打开日志查看器");
+                            }
                             KeyCode::Char('s') | KeyCode::Char('S') => {
                                 self.show_settings = true;
                                 self.settings_cursor = 0;
@@ -163,11 +219,13 @@ impl Panel {
                                     let _ = module.update().await;
                                 }
                                 self.status_message = "已刷新所有模块".to_string();
+                                self.logger.info("手动刷新所有模块");
                             }
                             KeyCode::Char('u') => {
                                 if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
                                     let _ = module.update().await;
                                     self.status_message = format!("已刷新：{}", module.name());
+                                    self.logger.info(&format!("手动刷新：{}", module.name()));
                                 }
                             }
                             KeyCode::Char(' ') => {
@@ -175,12 +233,14 @@ impl Panel {
                                     module.toggle_pause();
                                     let status = if module.is_paused() { "已暂停" } else { "已恢复" };
                                     self.status_message = format!("{}: {}", module.name(), status);
+                                    self.logger.info(&format!("{}：{}", module.name(), status));
                                 }
                             }
                             KeyCode::Char('l') | KeyCode::Char('L') => {
                                 self.layout_mode = self.layout_mode.next();
                                 self.adjust_column_weights();
                                 self.status_message = format!("布局：{:?} 列", self.layout_mode.columns());
+                                self.logger.info(&format!("切换布局：{}列", self.layout_mode.columns()));
                             }
                             KeyCode::Char('[') => {
                                 self.adjust_column_width(self.current_module_idx, -1);
@@ -254,7 +314,11 @@ impl Panel {
                 
                 let last_time = module_last_update.entry(id.clone()).or_insert(now);
                 if now.duration_since(*last_time).as_secs() >= interval {
-                    let _ = module.update().await;
+                    let result = module.update().await;
+                    if !result.success {
+                        let err = result.error.unwrap_or_else(|| "未知错误".to_string());
+                        self.logger.error(&format!("刷新 {}: {}", module.name(), err));
+                    }
                     *last_time = now;
                 }
             }
@@ -418,10 +482,15 @@ impl Panel {
         let help = List::new(vec![
             ListItem::new(Line::from("↑/↓ - 上下切换 | ←/→ - 左右列切换 | 空格 - 暂停 | +/- - 刷新间隔")),
             ListItem::new(Line::from("l - 切换布局 | [/] - 列宽 | PgUp/PgDn - 列高 | r - 刷新全部 | u - 刷新当前")),
-            ListItem::new(Line::from("s - 模块设置 | ESC - 关于 | q - 退出")),
+            ListItem::new(Line::from("s - 模块设置 | v - 日志 | ESC - 关于 | q - 退出")),
         ])
         .block(Block::default().title("帮助").borders(Borders::ALL));
         f.render_widget(help, main_chunks[3]);
+
+        // 日志查看器叠加层
+        if self.show_logs {
+            self.render_log_viewer(f);
+        }
 
         // 设置页面叠加层
         if self.show_settings {
@@ -432,6 +501,64 @@ impl Panel {
         if self.show_about {
             self.render_about(f);
         }
+    }
+
+    fn render_log_viewer(&mut self, f: &mut Frame) {
+        let area = f.size();
+        let block = Block::default()
+            .title("📋 日志")
+            .borders(Borders::ALL)
+            .style(Style::default().fg(Color::Cyan));
+
+        let log_area = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length((area.height - 4) / 2),
+                Constraint::Min(0),
+                Constraint::Length(1),
+            ])
+            .split(area)[1];
+
+        let inner = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Min(0),
+                Constraint::Length(2),
+            ])
+            .split(log_area)[1];
+
+        f.render_widget(Clear, inner);
+        f.render_widget(block, inner);
+
+        let content_area = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+            .split(inner)[1];
+
+        let entries = self.logger.recent(200);
+        let max_display = content_area.height.saturating_sub(1) as usize;
+        let start = self.log_scroll.min(entries.len().saturating_sub(max_display).max(0));
+        let visible: Vec<(&str, &LogLevel)> = entries.iter()
+            .skip(start)
+            .take(max_display)
+            .map(|(s, l)| (*s, l))
+            .collect();
+
+        let mut all_lines: Vec<Line> = visible.iter().map(|(text, level)| {
+            let color = match level {
+                LogLevel::Error => Color::Red,
+                LogLevel::Warn => Color::Yellow,
+                LogLevel::Info => Color::White,
+            };
+            Line::from(Span::styled(*text, Style::default().fg(color)))
+        }).collect();
+
+        let hint = format!("共 {} 条 | ↑↓ 滚动 | ESC/v 关闭", entries.len());
+        all_lines.push(Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))));
+
+        let paragraph = Paragraph::new(all_lines).block(Block::default());
+        f.render_widget(paragraph, content_area);
     }
 
     fn render_settings(&mut self, f: &mut Frame) {

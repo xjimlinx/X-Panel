@@ -1,13 +1,9 @@
-use x_panel::{Panel};
 use x_panel::modules::{DeepSeekBalanceModule, SystemInfoModule, NetworkMonitorModule, SystemTempModule, ClockModule};
+use x_panel::Panel;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 加载环境变量
     dotenvy::dotenv().ok();
-
-    // 初始化日志
-    env_logger::init();
 
     // 获取配置
     let api_key = std::env::var("DEEPSEEK_API_KEY")
@@ -27,27 +23,34 @@ async fn main() -> anyhow::Result<()> {
             api_key,
             refresh_interval,
         )));
+        panel.log_info("DeepSeek 余额模块已注册");
         println!("✅ 已注册 DeepSeek 余额模块");
     } else {
+        panel.log_info("未设置 DEEPSEEK_API_KEY，跳过 DeepSeek 余额模块");
         println!("⚠️  未设置 DEEPSEEK_API_KEY，跳过 DeepSeek 余额模块");
     }
 
     // 注册系统信息模块
     panel.register_module(Box::new(SystemInfoModule::new(30)));
+    panel.log_info("系统信息模块已注册");
     println!("✅ 已注册 系统信息模块");
 
     // 注册网络监控模块
     panel.register_module(Box::new(NetworkMonitorModule::new(5)));
+    panel.log_info("网络监控模块已注册");
     println!("✅ 已注册 网络监控模块");
 
     // 注册系统温度模块
     panel.register_module(Box::new(SystemTempModule::new(10)));
+    panel.log_info("系统温度模块已注册");
     println!("✅ 已注册 系统温度模块");
 
     // 注册时钟模块
     panel.register_module(Box::new(ClockModule::new(1)));
+    panel.log_info("时钟日历模块已注册");
     println!("✅ 已注册 时钟日历模块");
 
+    panel.log_info(&format!("启动完成，共 {} 个模块", panel.module_count()));
     println!("\n🚀 启动面板... 按 'q' 退出\n");
 
     // 运行面板

@@ -31,6 +31,7 @@ X-Panel/
 ├── src/
 │   ├── main.rs             # 主程序入口
 │   ├── lib.rs              # 库导出
+│   ├── logger.rs           # 日志系统（文件 + 环形缓冲区）
 │   ├── module_trait.rs     # 模块 trait 定义
 │   ├── registry.rs         # 模块注册表（含可见性管理）
 │   ├── panel.rs            # 主面板逻辑
@@ -84,6 +85,7 @@ cargo build --release
 | `{` / `PgUp` | 减小模块高度 |
 | `}` / `PgDn` | 增大模块高度 |
 | `s` | 打开模块设置（开关显示） |
+| `v` | 打开日志查看器 |
 | **ESC** | 关于页面 / 关闭弹窗 |
 
 ## 内置模块

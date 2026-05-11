@@ -134,6 +134,7 @@ fn rgb_tuple(c: Color) -> (u8, u8, u8) {
 fn load_user_themes() -> Vec<ThemeDef> {
     let dir = themes_dir();
     let _ = fs::create_dir_all(&dir);
+    let builtin_names: [&str; 4] = ["Dracula", "Solarized Light", "Nord", "Catppuccin Mocha"];
     let mut themes = Vec::new();
     let Ok(entries) = fs::read_dir(&dir) else { return themes };
     for entry in entries.flatten() {
@@ -144,6 +145,7 @@ fn load_user_themes() -> Vec<ThemeDef> {
                 match toml::from_str::<TomlTheme>(&content) {
                     Ok(t) => {
                         if let Some((name, theme)) = t.to_theme() {
+                            if builtin_names.contains(&name.as_str()) { continue; }
                             themes.push(ThemeDef { name, theme });
                         }
                     }

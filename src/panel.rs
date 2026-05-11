@@ -294,9 +294,16 @@ impl Panel {
                                 self.save_config();
                             }
                             KeyCode::Char('l') | KeyCode::Char('L') => {
-                                self.layout_mode = self.layout_mode.next();
+                                let visible = self.registry.visible_count();
+                                let current_eff = self.effective_cols_for(visible, self.layout_mode.columns());
+                                for _ in 0..3 {
+                                    self.layout_mode = self.layout_mode.next();
+                                    if self.effective_cols_for(visible, self.layout_mode.columns()) != current_eff {
+                                        break;
+                                    }
+                                }
                                 self.adjust_column_weights();
-                                self.status_message = format!("布局：{:?} 列", self.layout_mode.columns());
+                                self.status_message = format!("布局：{}列", self.effective_cols_for(visible, self.layout_mode.columns()));
                                 self.logger.info(&format!("切换布局：{}列", self.layout_mode.columns()));
                                 self.save_config();
                             }
@@ -395,7 +402,8 @@ impl Panel {
     }
     
     fn adjust_column_width(&mut self, module_idx: usize, delta: i16) {
-        let columns = self.layout_mode.columns();
+        let visible = self.registry.visible_count();
+        let columns = self.effective_cols_for(visible, self.layout_mode.columns());
         if columns <= 1 { return; }
         
         // 计算模块所在的列
@@ -409,6 +417,10 @@ impl Panel {
         
         self.status_message = format!("列{}宽度：{}", column_idx + 1, new_weight);
         self.save_config();
+    }
+
+    fn effective_cols_for(&self, visible: usize, max_cols: usize) -> usize {
+        std::cmp::min(max_cols, visible)
     }
 
     fn modules_per_column(&self) -> usize {
@@ -775,11 +787,7 @@ impl Panel {
         }
 
         let max_cols = self.layout_mode.columns();
-        let effective_cols = (1..=max_cols.min(modules.len()))
-            .rev()
-            .find(|&c| (modules.len() + c - 1) / c * (c - 1) < modules.len())
-            .unwrap_or(1);
-        let modules_per_column = (modules.len() + effective_cols - 1) / effective_cols;
+        let effective_cols = std::cmp::min(max_cols, modules.len());
 
         let column_constraints: Vec<Constraint> = self.column_weights.iter()
             .take(effective_cols)
@@ -791,9 +799,16 @@ impl Panel {
             .constraints(column_constraints)
             .split(area);
 
+        // 均衡分配：前 rem 列多一个模块
+        let base = modules.len() / effective_cols;
+        let rem = modules.len() % effective_cols;
+        let mut module_offset = 0;
+
         for (col_idx, column_area) in columns_layout.iter().enumerate() {
-            let start_idx = col_idx * modules_per_column;
-            let end_idx = std::cmp::min(start_idx + modules_per_column, modules.len());
+            let col_size = base + if col_idx < rem { 1 } else { 0 };
+            let start_idx = module_offset;
+            let end_idx = module_offset + col_size;
+            module_offset = end_idx;
             if start_idx >= modules.len() { continue; }
 
             let constraints: Vec<Constraint> = modules[start_idx..end_idx]

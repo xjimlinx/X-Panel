@@ -100,8 +100,8 @@ impl Panel {
             let idx = self.module_height_deltas.len() - 1;
             self.module_height_deltas[idx] = mcfg.height_offset;
             self.registry.set_visible(&id, mcfg.visible);
-            if let Some((_, m)) = self.registry.modules_mut().nth(idx) {
-                m.set_refresh_interval(60); // 恢复时重置间隔
+            if let Some((_, m)) = self.registry.get_mut(idx) {
+                m.set_refresh_interval(60);
             }
             self.logger.info(&format!("恢复模块配置：{}", name));
         }
@@ -135,6 +135,9 @@ impl Panel {
             self.column_weights = vec![10; self.layout_mode.columns()];
         }
         self.theme_index = theme_index_by_name(&self.config.theme).unwrap_or(0);
+        if !self.config.module_order.is_empty() {
+            self.registry.set_order(self.config.module_order.clone());
+        }
         self.logger.info(&format!("应用保存的配置：{:?} 列, 主题 {}", self.layout_mode.columns(), self.config.theme));
     }
 
@@ -147,6 +150,7 @@ impl Panel {
         }.to_string();
         self.config.column_weights = self.column_weights.clone();
         self.config.theme = all_themes()[self.theme_index].name.clone();
+        self.config.module_order = self.registry.order().to_vec();
 
         // 更新所有模块的配置
         for (i, (id, _)) in self.registry.modules().enumerate() {
@@ -172,11 +176,13 @@ impl Panel {
         self.logger.info("X-Panel 启动");
 
         // 立即更新所有模块
-        for (_, module) in self.registry.modules_mut() {
-            let result = module.update().await;
-            if !result.success {
-                let err = result.error.unwrap_or_else(|| "未知错误".to_string());
-                self.logger.error(&format!("初始刷新 {}: {}", module.name(), err));
+        for idx in 0..self.registry.len() {
+            if let Some((_, module)) = self.registry.get_mut(idx) {
+                let result = module.update().await;
+                if !result.success {
+                    let err = result.error.unwrap_or_else(|| "未知错误".to_string());
+                    self.logger.error(&format!("初始刷新 {}: {}", module.name(), err));
+                }
             }
         }
 
@@ -273,6 +279,18 @@ impl Panel {
                                     self.settings_cursor += 1;
                                 }
                             }
+                            KeyCode::Char('[') => {
+                                self.registry.move_up(self.settings_cursor);
+                                if self.settings_cursor > 0 {
+                                    self.settings_cursor -= 1;
+                                }
+                            }
+                            KeyCode::Char(']') => {
+                                self.registry.move_down(self.settings_cursor);
+                                if self.settings_cursor + 1 < self.registry.len() {
+                                    self.settings_cursor += 1;
+                                }
+                            }
                             KeyCode::Char(' ') => {
                                 if let Some(id) = self.registry.nth_id(self.settings_cursor) {
                                     let visible = self.registry.is_visible(&id);
@@ -312,14 +330,16 @@ impl Panel {
                             }
                             KeyCode::Char('q') => self.running = false,
                             KeyCode::Char('r') => {
-                                for (_, module) in self.registry.modules_mut() {
-                                    let _ = module.update().await;
+                                for idx in 0..self.registry.len() {
+                                    if let Some((_, module)) = self.registry.get_mut(idx) {
+                                        let _ = module.update().await;
+                                    }
                                 }
                                 self.status_message = "已刷新所有模块".to_string();
                                 self.logger.info("手动刷新所有模块");
                             }
                             KeyCode::Char('u') => {
-                                if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
+                                if let Some((_, module)) = self.registry.get_mut(self.current_module_idx) {
                                     let _ = module.update().await;
                                     self.status_message = format!("已刷新：{}", module.name());
                                     self.logger.info(&format!("手动刷新：{}", module.name()));
@@ -327,7 +347,7 @@ impl Panel {
                             }
                             KeyCode::Char(' ') => {
                                 let mut info = None;
-                                if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
+                                if let Some((_, module)) = self.registry.get_mut(self.current_module_idx) {
                                     module.toggle_pause();
                                     info = Some((module.name().to_string(), module.is_paused()));
                                 }
@@ -365,7 +385,7 @@ impl Panel {
                                 self.adjust_column_width(self.current_module_idx, 1);
                             }
                             KeyCode::Char('+') | KeyCode::Char('=') => {
-                                if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
+                                if let Some((_, module)) = self.registry.get_mut(self.current_module_idx) {
                                     let current = module.refresh_interval();
                                     let new_interval = (current + 10).min(300);
                                     module.set_refresh_interval(new_interval);
@@ -373,7 +393,7 @@ impl Panel {
                                 }
                             }
                             KeyCode::Char('-') => {
-                                if let Some((_, module)) = self.registry.modules_mut().nth(self.current_module_idx) {
+                                if let Some((_, module)) = self.registry.get_mut(self.current_module_idx) {
                                     let current = module.refresh_interval();
                                     let new_interval = if current <= 5 { 1 } else { current - 5 };
                                     module.set_refresh_interval(new_interval);
@@ -429,7 +449,7 @@ impl Panel {
                 .map(|(id, _)| id.clone())
                 .collect();
             for id in &ids {
-                if let Some((_, module)) = self.registry.modules_mut().find(|(i, _)| *i == id) {
+                if let Some((_, module)) = self.registry.get_mut_by_id(id) {
                     let interval = module.refresh_interval();
                     if interval == 0 { continue; }
                     let last_time = module_last_update.entry(id.clone()).or_insert(now);
@@ -799,7 +819,7 @@ impl Panel {
 
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("↑/↓ - 选择 | 空格 - 开关 | ESC - 返回", Style::default().fg(self.theme().dim)),
+            Span::styled("↑/↓ - 选择 | [/] - 移动 | 空格 - 开关 | ESC - 返回", Style::default().fg(self.theme().dim)),
         ]));
 
         let inner_area = Layout::default()

@@ -18,6 +18,8 @@ pub struct Config {
     #[serde(default)]
     pub theme: String,
     #[serde(default)]
+    pub module_order: Vec<String>,
+    #[serde(default)]
     pub modules: HashMap<String, ModuleConfig>,
 }
 
@@ -28,6 +30,7 @@ impl Default for Config {
             column_weights: vec![10],
             deepseek_api_key: String::new(),
             theme: "Dracula".to_string(),
+            module_order: Vec::new(),
             modules: HashMap::new(),
         }
     }

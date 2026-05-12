@@ -8,6 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap, Widget},
     Frame,
 };
+use std::collections::HashMap;
 use std::fs;
 use std::time::Instant;
 use crate::theme::Theme;
@@ -18,8 +19,39 @@ struct NetworkStats {
     tx_bytes: u64,
 }
 
+fn list_interfaces() -> Vec<String> {
+    let mut interfaces = Vec::new();
+    if let Ok(entries) = fs::read_dir("/sys/class/net") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == "lo" {
+                continue;
+            }
+            interfaces.push(name);
+        }
+    }
+    interfaces.sort();
+    interfaces
+}
+
+fn get_default_interface() -> String {
+    let interfaces = list_interfaces();
+    for name in &interfaces {
+        if name.starts_with("wlan") || name.starts_with("wl") {
+            return name.clone();
+        }
+    }
+    for name in &interfaces {
+        if name.starts_with("eth") || name.starts_with("en") {
+            return name.clone();
+        }
+    }
+    interfaces.first().cloned().unwrap_or_else(|| "eth0".to_string())
+}
+
 pub struct NetworkMonitorModule {
     interface: String,
+    interfaces: Vec<String>,
     wifi_ssid: String,
     wifi_signal: String,
     local_ip: String,
@@ -35,28 +67,19 @@ pub struct NetworkMonitorModule {
     prev_time: Option<Instant>,
 }
 
-fn get_default_interface() -> String {
-    if let Ok(entries) = fs::read_dir("/sys/class/net") {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name == "lo" || name.starts_with("docker") || name.starts_with("br-") {
-                continue;
-            }
-            if name.starts_with("wlan") || name.starts_with("wl") {
-                return name;
-            }
-            if name.starts_with("eth") || name.starts_with("en") {
-                return name;
-            }
-        }
-    }
-    "eth0".to_string()
-}
-
 impl NetworkMonitorModule {
-    pub fn new(refresh_interval: u64) -> Self {
+    pub fn new(interface: String, refresh_interval: u64) -> Self {
+        let interfaces = list_interfaces();
+        let iface = if interface.is_empty() {
+            get_default_interface()
+        } else if interfaces.contains(&interface) {
+            interface
+        } else {
+            get_default_interface()
+        };
         Self {
-            interface: get_default_interface(),
+            interface: iface,
+            interfaces,
             wifi_ssid: String::new(),
             wifi_signal: String::new(),
             local_ip: String::new(),
@@ -71,6 +94,17 @@ impl NetworkMonitorModule {
             prev_stats: None,
             prev_time: None,
         }
+    }
+
+    fn cycle_interface(&mut self) {
+        if self.interfaces.is_empty() { return; }
+        if let Some(pos) = self.interfaces.iter().position(|i| i == &self.interface) {
+            let next = (pos + 1) % self.interfaces.len();
+            self.interface = self.interfaces[next].clone();
+        } else {
+            self.interface = self.interfaces[0].clone();
+        }
+        self.update_info();
     }
 
     fn update_info(&mut self) {
@@ -97,7 +131,7 @@ impl NetworkMonitorModule {
         let (wifi_ssid, wifi_signal) = Self::get_wifi_info();
         self.wifi_ssid = wifi_ssid;
         self.wifi_signal = wifi_signal;
-        self.local_ip = Self::get_local_ip();
+        self.local_ip = Self::get_local_ip(&self.interface);
         self.last_update = Local::now().format("%H:%M:%S").to_string();
         self.error = None;
     }
@@ -156,22 +190,25 @@ impl NetworkMonitorModule {
         (ssid, signal)
     }
 
-    fn get_local_ip() -> String {
-        if let Ok(output) = std::process::Command::new("ip").args(["addr", "show"]).output() {
+    fn get_local_ip(interface: &str) -> String {
+        if let Ok(output) = std::process::Command::new("ip")
+            .args(["addr", "show", interface])
+            .output()
+        {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines() {
-                if line.contains("inet ") && !line.contains("127.0.0.1") {
-                    if let Some(start) = line.find("inet ") {
-                        let ip_part = &line[start + 5..];
-                        if let Some(ip) = ip_part.split_whitespace().next() {
-                            return ip.split('/').next().unwrap_or("N/A").to_string();
+                let trimmed = line.trim();
+                if trimmed.starts_with("inet ") {
+                    if let Some(rest) = trimmed.strip_prefix("inet ") {
+                        if let Some(ip) = rest.split_whitespace().next() {
+                            let ip = ip.split('/').next().unwrap_or("N/A");
+                            if ip != "127.0.0.1" {
+                                return ip.to_string();
+                            }
                         }
                     }
                 }
             }
-        }
-        if let Ok(output) = std::process::Command::new("hostname").arg("-I").output() {
-            return String::from_utf8_lossy(&output.stdout).split_whitespace().next().unwrap_or("N/A").to_string();
         }
         "N/A".to_string()
     }
@@ -214,34 +251,58 @@ impl PanelModule for NetworkMonitorModule {
             Style::default().fg(theme.border_default)
         };
         
+        let hint = if is_selected { " [n 切换网卡]" } else { "" };
+        let iface_line = Line::from(vec![
+            Span::styled("接口：", Style::default().fg(Color::Yellow)),
+            Span::styled(&self.interface, Style::default().fg(Color::White)),
+            Span::styled(hint, Style::default().fg(Color::DarkGray)),
+        ]);
+        
         let wifi_line = if !self.wifi_ssid.is_empty() && self.wifi_ssid != "N/A" {
-            Line::from(vec![
+            Some(Line::from(vec![
                 Span::styled("WiFi: ", Style::default().fg(Color::Yellow)),
                 Span::styled(&self.wifi_ssid, Style::default().fg(Color::Green)),
                 Span::styled(format!(" ({}%)", self.wifi_signal), Style::default().fg(Color::Cyan)),
-            ])
+            ]))
         } else {
-            Line::from(vec![
-                Span::styled("网络：", Style::default().fg(Color::Yellow)),
-                Span::styled(&self.interface, Style::default().fg(Color::White)),
-            ])
+            None
         };
         
-        let lines = vec![
-            Line::from(vec![Span::styled("IP:   ", Style::default().fg(Color::Yellow)), Span::styled(&self.local_ip, Style::default().fg(Color::White))]),
-            wifi_line,
-            Line::from(vec![Span::styled("↓ 下载：", Style::default().fg(Color::Green)), Span::styled(&self.rx_speed, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Span::raw("  (总计: "), Span::styled(&self.total_rx, Style::default().fg(Color::DarkGray)), Span::raw(")")]),
-            Line::from(vec![Span::styled("↑ 上传：", Style::default().fg(Color::Cyan)), Span::styled(&self.tx_speed, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)), Span::raw("  (总计: "), Span::styled(&self.total_tx, Style::default().fg(Color::DarkGray)), Span::raw(")")]),
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled("IP:   ", Style::default().fg(Color::Yellow)),
+                Span::styled(&self.local_ip, Style::default().fg(Color::White)),
+            ]),
+            iface_line,
         ];
+        if let Some(wifi) = wifi_line {
+            lines.push(wifi);
+        }
+        lines.extend_from_slice(&[
+            Line::from(vec![
+                Span::styled("↓ ", Style::default().fg(Color::Green)),
+                Span::styled(&self.rx_speed, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw("  ("),
+                Span::styled(&self.total_rx, Style::default().fg(Color::DarkGray)),
+                Span::raw(")"),
+            ]),
+            Line::from(vec![
+                Span::styled("↑ ", Style::default().fg(Color::Cyan)),
+                Span::styled(&self.tx_speed, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw("  ("),
+                Span::styled(&self.total_tx, Style::default().fg(Color::DarkGray)),
+                Span::raw(")"),
+            ]),
+        ]);
         
         let pause_line = if self.paused {
             Line::from(Span::styled("⏸️ 已暂停", Style::default().fg(Color::Yellow)))
         } else {
             Line::from(Span::styled(format!("🕐 每{}秒刷新", self.refresh_interval), Style::default().fg(Color::DarkGray)))
         };
+        lines.push(pause_line);
         
-        let all_lines = [lines, vec![pause_line]].concat();
-        Paragraph::new(all_lines)
+        Paragraph::new(lines)
             .block(Block::default().title(self.name()).borders(Borders::ALL).border_style(border_style).style(Style::default().fg(theme.text).bg(theme.bg)))
             .wrap(Wrap { trim: true })
             .render(area, frame.buffer_mut());
@@ -249,4 +310,27 @@ impl PanelModule for NetworkMonitorModule {
     
     fn height(&self) -> u16 { 9 }
     fn get_error(&self) -> Option<&str> { self.error.as_deref() }
+
+    fn handle_key(&mut self, key: char) -> bool {
+        if key == 'n' || key == 'N' {
+            self.cycle_interface();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn save_state(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        map.insert("interface".to_string(), self.interface.clone());
+        map
+    }
+
+    fn load_state(&mut self, data: &HashMap<String, String>) {
+        if let Some(iface) = data.get("interface") {
+            if self.interfaces.contains(iface) {
+                self.interface = iface.clone();
+            }
+        }
+    }
 }

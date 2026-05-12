@@ -2,6 +2,7 @@ use crate::theme::Theme;
 use async_trait::async_trait;
 use ratatui::layout::Rect;
 use ratatui::Frame;
+use std::collections::HashMap;
 
 /// 模块更新结果
 #[derive(Debug, Clone)]
@@ -48,4 +49,13 @@ pub trait PanelModule: Send + Sync {
     
     /// 处理错误
     fn get_error(&self) -> Option<&str>;
+
+    /// 处理按键事件，返回 true 表示已处理
+    fn handle_key(&mut self, _key: char) -> bool { false }
+
+    /// 保存模块状态到配置
+    fn save_state(&self) -> HashMap<String, String> { HashMap::new() }
+
+    /// 从配置恢复模块状态
+    fn load_state(&mut self, _data: &HashMap<String, String>) {}
 }

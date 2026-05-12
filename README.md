@@ -2,7 +2,7 @@
 
 模块化终端面板框架 - 基于 Rust + TUI
 
-![Version](https://img.shields.io/badge/version-0.5.0-blue)
+![Version](https://img.shields.io/badge/version-0.6.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## 功能特性
@@ -20,7 +20,7 @@
 - 🌐 **Web API 监控**: 自定义 HTTP 接口监控（配置 config.toml）
 - 📐 **动态布局**: 多列自适应 + 列宽/列高可调
 - 🎨 **主题系统**: 4 内置主题 + 用户自定义 TOML 主题
-- ⌨️ **快捷键**: 丰富的键盘交互
+- ⌨️ **快捷键**: 丰富的键盘交互（含模块级按键事件）
 - 🎨 **美观 UI**: 基于 ratatui 的现代化终端界面
 
 ## 项目结构
@@ -92,6 +92,7 @@ cargo build --release
 | `t` | 打开主题选择器 |
 | `q` | 退出（弹窗确认，y 确认） |
 | **ESC** | 关于页面 / 关闭弹窗 |
+| `n` | 切换网卡（网络监控模块选中时） |
 
 ## 内置模块
 
@@ -127,10 +128,15 @@ cargo build --release
 实时监控网络状态。
 
 **显示内容**:
-- 本地 IP 地址
+- 当前网卡
+- 本地 IP 地址（随网卡切换）
 - WiFi SSID 和信号强度
 - 实时下载/上传速度
 - 累计流量统计
+
+**操作**:
+- `n` 键循环切换可用网卡（选中模块时）
+- 选择自动保存到配置文件
 
 **刷新间隔**: 5 秒（可按 +/- 调整）
 

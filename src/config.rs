@@ -3,10 +3,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModuleConfig {
     pub visible: bool,
     pub height_offset: i16,
+    #[serde(default)]
+    pub data: HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

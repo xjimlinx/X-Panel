@@ -36,8 +36,8 @@ async fn main() -> anyhow::Result<()> {
     panel.log_info("系统信息模块已注册");
     println!("✅ 已注册 系统信息模块");
 
-    // 注册网络监控模块
-    panel.register_module(Box::new(NetworkMonitorModule::new(5)));
+    // 注册网络监控模块（空字符串表示自动检测网卡）
+    panel.register_module(Box::new(NetworkMonitorModule::new(String::new(), 5)));
     panel.log_info("网络监控模块已注册");
     println!("✅ 已注册 网络监控模块");
 

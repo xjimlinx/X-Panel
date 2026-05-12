@@ -104,6 +104,7 @@ impl Panel {
             self.registry.set_visible(&id, mcfg.visible);
             if let Some((_, m)) = self.registry.get_mut(idx) {
                 m.set_refresh_interval(60);
+                m.load_state(&mcfg.data);
             }
             self.logger.info(&format!("恢复模块配置：{}", name));
         }
@@ -155,12 +156,14 @@ impl Panel {
         self.config.module_order = self.registry.order().to_vec();
 
         // 更新所有模块的配置
-        for (i, (id, _)) in self.registry.modules().enumerate() {
+        for (i, (id, module)) in self.registry.modules().enumerate() {
             let visible = self.registry.is_visible(id);
             let height_offset = self.module_height_deltas.get(i).copied().unwrap_or(0);
+            let data = module.save_state();
             self.config.modules.insert(id.clone(), ModuleConfig {
                 visible,
                 height_offset,
+                data,
             });
         }
 
@@ -437,7 +440,15 @@ impl Panel {
                             KeyCode::Char('}') | KeyCode::PageDown => {
                                 self.adjust_module_height(self.current_module_idx, 1);
                             }
-                            _ => {}
+                            _ => {
+                                if let KeyCode::Char(c) = key.code {
+                                    if let Some((_, module)) = self.registry.get_mut(self.current_module_idx) {
+                                        if module.handle_key(c) {
+                                            self.save_config();
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

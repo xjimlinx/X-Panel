@@ -6,7 +6,7 @@
 X-Panel（模块化终端面板框架）
 
 ### 1.2 版本
-v0.1.0
+v0.6.0
 
 ### 1.3 项目目标
 创建一个基于 Rust + TUI 的模块化终端面板框架，支持：
@@ -122,6 +122,13 @@ pub trait PanelModule: Send + Sync {
     
     // 错误处理
     fn get_error(&self) -> Option<&str>;
+
+    // 按键事件（默认不处理）
+    fn handle_key(&mut self, key: char) -> bool { false }
+
+    // 状态持久化（默认无状态）
+    fn save_state(&self) -> HashMap<String, String> { HashMap::new() }
+    fn load_state(&mut self, data: &HashMap<String, String>) {}
 }
 ```
 
@@ -328,6 +335,15 @@ fn send_task_notification(task_name: &str) {
 | `-` | 减少间隔 | 当前选中 |
 | `↑` | 上一个模块 | 全局 |
 | `↓` | 下一个模块 | 全局 |
+| `←` / `→` | 左右列间切换 | 全局 |
+| `l` | 切换布局 | 全局 |
+| `[` / `]` | 列宽调整 | 当前选中 |
+| `{` / `PgUp` | 减小高度 | 当前选中 |
+| `}` / `PgDn` | 增加高度 | 当前选中 |
+| `s` | 模块设置 | 全局 |
+| `v` | 日志查看器 | 全局 |
+| `t` | 主题选择 | 全局 |
+| `n` | 切换网卡（网络监控模块） | 模块级 |
 
 ---
 
@@ -403,6 +419,7 @@ impl PanelModule for MyModule {
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 0.6.0 | 2026-05-12 | 网卡选择、模块按键事件、模块状态持久化 |
 | 0.1.0 | 2026-03-15 | 初始版本，包含 DeepSeek 余额和系统信息模块 |
 
 ---

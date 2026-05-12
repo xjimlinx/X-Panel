@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0] - 2026-05-12
+
+### Added
+- 网络监控模块网卡选择（选中模块后按 n 键循环切换可用网卡，IP 随网卡同步更新）
+- 模块按键事件机制（PanelModule trait 新增 handle_key/save_state/load_state 默认方法）
+- 模块状态持久化（模块私有数据通过配置文件的 data 字段自动保存/恢复）
+
 ## [0.5.1] - 2026-05-12
 
 ### Fixed

@@ -418,21 +418,17 @@ impl Panel {
                                 }
                             }
                             KeyCode::Left => {
-                                if self.layout_mode.columns() > 1 {
-                                    if let Some(idx) = self.navigate_horizontal(self.current_module_idx, -1) {
-                                        self.current_module_idx = idx;
-                                        self.adjust_current_visible();
-                                        self.status_message = format!("选中：{}", self.get_current_module_name());
-                                    }
+                                if let Some(idx) = self.navigate_horizontal(self.current_module_idx, -1) {
+                                    self.current_module_idx = idx;
+                                    self.adjust_current_visible();
+                                    self.status_message = format!("选中：{}", self.get_current_module_name());
                                 }
                             }
                             KeyCode::Right => {
-                                if self.layout_mode.columns() > 1 {
-                                    if let Some(idx) = self.navigate_horizontal(self.current_module_idx, 1) {
-                                        self.current_module_idx = idx;
-                                        self.adjust_current_visible();
-                                        self.status_message = format!("选中：{}", self.get_current_module_name());
-                                    }
+                                if let Some(idx) = self.navigate_horizontal(self.current_module_idx, 1) {
+                                    self.current_module_idx = idx;
+                                    self.adjust_current_visible();
+                                    self.status_message = format!("选中：{}", self.get_current_module_name());
                                 }
                             }
                             KeyCode::Char('{') | KeyCode::PageUp => {
@@ -500,20 +496,25 @@ impl Panel {
     }
     
     fn adjust_column_width(&mut self, module_idx: usize, delta: i16) {
-        let visible = self.registry.visible_count();
-        let columns = self.effective_cols_for(visible, self.layout_mode.columns());
-        if columns <= 1 { return; }
+        let (indices, effective_cols, col_sizes) = self.visible_layout_info();
+        if effective_cols <= 1 { return; }
+
+        let pos = indices.iter().position(|&i| i == module_idx).unwrap_or(usize::MAX);
+        if pos == usize::MAX { return; }
+
+        let mut offset = 0;
+        let mut col = 0;
+        for (c, &size) in col_sizes.iter().enumerate() {
+            if pos < offset + size { col = c; break; }
+            offset += size;
+        }
+
+        if col >= self.column_weights.len() { return; }
         
-        // 计算模块所在的列
-        let modules_per_column = (self.registry.len() + columns - 1) / columns;
-        let column_idx = module_idx / modules_per_column;
+        let new_weight = (self.column_weights[col] as i16 + delta).clamp(3, 20) as u16;
+        self.column_weights[col] = new_weight;
         
-        if column_idx >= columns { return; }
-        
-        let new_weight = (self.column_weights[column_idx] as i16 + delta).max(3).min(20) as u16;
-        self.column_weights[column_idx] = new_weight;
-        
-        self.status_message = format!("列{}宽度：{}", column_idx + 1, new_weight);
+        self.status_message = format!("列{}宽度：{}", col + 1, new_weight);
         self.save_config();
     }
 
@@ -521,32 +522,54 @@ impl Panel {
         std::cmp::min(max_cols, visible)
     }
 
-    fn modules_per_column(&self) -> usize {
-        let len = self.registry.len();
-        let cols = self.layout_mode.columns();
-        if cols == 0 { return len; }
-        (len + cols - 1) / cols
+    fn visible_indices(&self) -> Vec<usize> {
+        self.registry.modules()
+            .enumerate()
+            .filter(|(_, (id, _))| self.registry.is_visible(id))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    fn visible_layout_info(&self) -> (Vec<usize>, usize, Vec<usize>) {
+        let indices = self.visible_indices();
+        let visible_count = indices.len();
+        let effective_cols = std::cmp::min(self.layout_mode.columns(), visible_count).max(1);
+        let base = visible_count / effective_cols;
+        let rem = visible_count % effective_cols;
+        let mut col_sizes = Vec::with_capacity(effective_cols);
+        for c in 0..effective_cols {
+            col_sizes.push(base + if c < rem { 1 } else { 0 });
+        }
+        (indices, effective_cols, col_sizes)
     }
 
     fn navigate_horizontal(&self, from_idx: usize, direction: i8) -> Option<usize> {
-        let cols = self.layout_mode.columns();
-        let mpc = self.modules_per_column();
-        let len = self.registry.len();
-        let cur_col = from_idx / mpc;
-        let row = from_idx % mpc;
+        let (indices, effective_cols, col_sizes) = self.visible_layout_info();
+        if effective_cols <= 1 { return None; }
+
+        let pos = indices.iter().position(|&i| i == from_idx)?;
+
+        let mut offset = 0;
+        let mut cur_col = 0;
+        for (c, &size) in col_sizes.iter().enumerate() {
+            if pos < offset + size { cur_col = c; break; }
+            offset += size;
+        }
 
         let target_col = if direction > 0 {
-            if cur_col + 1 >= cols { return None; }
+            if cur_col + 1 >= effective_cols { return None; }
             cur_col + 1
         } else {
             if cur_col == 0 { return None; }
             cur_col - 1
         };
 
-        let start = target_col * mpc;
-        let end = std::cmp::min(start + mpc, len);
-        if start >= len { return None; }
-        Some(std::cmp::min(start + row, end - 1))
+        let target_offset: usize = col_sizes.iter().take(target_col).sum();
+
+        let row = pos - offset;
+        let target_pos = (target_offset + row).min(target_offset + col_sizes[target_col] - 1);
+
+        Some(indices[target_pos])
     }
 
     fn visible_prev(&self, from: usize) -> Option<usize> {
@@ -590,13 +613,26 @@ impl Panel {
 
     fn adjust_module_height(&mut self, module_idx: usize, delta: i16) {
         if module_idx >= self.module_height_deltas.len() { return; }
-        let len = self.registry.len();
-        let mpc = self.modules_per_column();
-        let col = module_idx / mpc;
-        let start = col * mpc;
-        let end = std::cmp::min(start + mpc, len);
 
-        if end - start != 2 {
+        let (indices, _effective_cols, col_sizes) = self.visible_layout_info();
+
+        let pos = indices.iter().position(|&i| i == module_idx).unwrap_or(usize::MAX);
+        if pos == usize::MAX { return; }
+
+        let col_modules: Vec<usize> = {
+            let mut start = 0;
+            let mut col_mods = Vec::new();
+            for &size in &col_sizes {
+                if pos >= start && pos < start + size {
+                    col_mods = indices[start..start + size].to_vec();
+                    break;
+                }
+                start += size;
+            }
+            col_mods
+        };
+
+        if col_modules.len() != 2 {
             self.status_message = "当前列不支持调整高度（仅 2 个模块的列可调）".to_string();
             return;
         }
@@ -604,7 +640,7 @@ impl Panel {
         let new_delta = (self.module_height_deltas[module_idx] + delta).clamp(-5, 10);
         self.module_height_deltas[module_idx] = new_delta;
 
-        let other = if module_idx == start { start + 1 } else { start };
+        let other = col_modules.iter().find(|&&i| i != module_idx).copied().unwrap();
         let other_delta = (self.module_height_deltas[other] - delta).clamp(-5, 10);
         self.module_height_deltas[other] = other_delta;
 

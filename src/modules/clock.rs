@@ -35,7 +35,7 @@ impl ClockModule {
         let now = Local::now();
         self.time = now.format("%H:%M:%S").to_string();
         self.date = now.format("%Y年%m月%d日").to_string();
-        self.weekday = match now.weekday().number_from_sunday() {
+        self.weekday = match now.weekday().num_days_from_sunday() {
             0 => "星期日", 1 => "星期一", 2 => "星期二", 3 => "星期三",
             4 => "星期四", 5 => "星期五", 6 => "星期六", _ => "未知",
         }.to_string();

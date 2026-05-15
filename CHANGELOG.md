@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.1] - 2026-05-12
+
+### Fixed
+- 修复时钟模块星期显示错位（number_from_sunday 1 起始 vs match 0 起始不匹配）
+
 ## [0.6.0] - 2026-05-12
 
 ### Added

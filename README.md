@@ -2,7 +2,7 @@
 
 模块化终端面板框架 - 基于 Rust + TUI
 
-![Version](https://img.shields.io/badge/version-0.6.0-blue)
+![Version](https://img.shields.io/badge/version-0.6.1-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## 功能特性
